@@ -1,0 +1,13 @@
+import { Event } from '../Event.js';
+
+export class FileSavedEvent extends Event {
+
+    constructor(
+        public readonly path: string,
+    ) {
+
+        super();
+
+    }
+
+}

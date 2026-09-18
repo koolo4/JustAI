@@ -1,0 +1,65 @@
+{
+    "extends": "../tsconfig.base.json",
+
+    "compilerOptions": {
+
+        "rootDir": "src",
+
+        "outDir": "dist",
+
+        "types": [
+            "node"
+        ],
+
+        "baseUrl": ".",
+
+        "ignoreDeprecations": "5.0",
+
+        "paths": {
+            "@app/*": [
+                "src/app/*"
+            ],
+
+            "@config/*": [
+                "src/core/config/*"
+            ],
+
+            "@controllers/*": [
+                "src/modules/*"
+            ],
+
+            "@middleware/*": [
+                "src/core/middleware/*"
+            ],
+
+            "@routes/*": [
+                "src/modules/*"
+            ],
+
+            "@services/*": [
+                "src/modules/*"
+            ],
+
+            "@providers/*": [
+                "src/providers/*"
+            ],
+
+            "@utils/*": [
+                "src/utils/*"
+            ],
+
+            "@types/*": [
+                "src/types/*"
+            ],
+
+            "@websocket/*": [
+                "src/websocket/*"
+            ]
+        }
+
+    },
+
+    "include": [
+        "src"
+    ]
+}
