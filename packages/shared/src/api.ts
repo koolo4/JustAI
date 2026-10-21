@@ -1,6 +1,6 @@
 import type { Message } from "./messages.js";
 import type { PermissionDecision, PermissionMode, PermissionRequest } from "./permissions.js";
-import type { SessionSummary } from "./sessions.js";
+import type { SessionSummary, Todo } from "./sessions.js";
 
 /** REST API агента (MASTER_PLAN, раздел 5.5). */
 
@@ -35,6 +35,8 @@ export interface SessionDetails {
     session: SessionSummary;
     messages: Message[];
     pendingPermissions: PermissionRequest[];
+    /** Текущий план агента (последний todo_write). */
+    todos: Todo[];
 }
 
 export interface FileChange {

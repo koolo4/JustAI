@@ -388,6 +388,47 @@ button {
     grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.todo-list {
+    margin-top: 10px;
+    border: 1px solid #2b333d;
+    border-radius: 8px;
+    background: #12161b;
+    font-size: 12px;
+}
+
+.todo-list summary {
+    display: flex;
+    justify-content: space-between;
+    padding: 7px 9px;
+    cursor: pointer;
+}
+
+.todo-list ul {
+    list-style: none;
+    margin: 0;
+    padding: 0 9px 8px;
+    max-height: 160px;
+    overflow: auto;
+}
+
+.todo-list li {
+    padding: 2px 0;
+}
+
+.todo-list li.completed {
+    color: #6b7785;
+    text-decoration: line-through;
+}
+
+.todo-list li.in_progress {
+    color: #f6e05e;
+}
+
+.todo-mark {
+    display: inline-block;
+    width: 16px;
+}
+
 .session-changes {
     border: 1px solid #2b333d;
     border-radius: 8px;

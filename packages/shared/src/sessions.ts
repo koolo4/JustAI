@@ -23,3 +23,9 @@ export interface SessionSummary {
     /** Последняя ошибка или причина остановки. */
     lastError?: string;
 }
+
+/** Пункт плана, который ведёт агент (инструмент todo_write). */
+export interface Todo {
+    content: string;
+    status: "pending" | "in_progress" | "completed";
+}

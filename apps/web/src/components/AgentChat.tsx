@@ -7,6 +7,7 @@ import type {
     PermissionDecision,
     PermissionMode,
     PermissionRequest,
+    Todo,
     ProviderInfo,
     SessionSummary,
     ToolOutput,
@@ -196,6 +197,8 @@ export function AgentChat() {
                 )}
             </div>
 
+            {agent.todos.length > 0 && <TodoList todos={agent.todos} />}
+
             <div className="ai-messages" ref={scrollRef}>
                 {agent.messages.length === 0 && !running && (
                     <div className="ai-placeholder">
@@ -367,6 +370,29 @@ function ToolCard({
             <pre className="tool-detail">{JSON.stringify(use.input, null, 2)}</pre>
             {live && <pre className="tool-detail">{progress.output}</pre>}
             {result && <pre className="tool-detail">{outputText(result.content)}</pre>}
+        </details>
+    );
+}
+
+function TodoList({ todos }: { todos: Todo[] }) {
+    const done = todos.filter(todo => todo.status === "completed").length;
+
+    return (
+        <details className="todo-list" open>
+            <summary>
+                <strong>Plan</strong>
+                <span className="muted">{done}/{todos.length}</span>
+            </summary>
+            <ul>
+                {todos.map((todo, index) => (
+                    <li key={index} className={todo.status}>
+                        <span className="todo-mark">
+                            {todo.status === "completed" ? "✓" : todo.status === "in_progress" ? "▸" : "○"}
+                        </span>
+                        {todo.content}
+                    </li>
+                ))}
+            </ul>
         </details>
     );
 }

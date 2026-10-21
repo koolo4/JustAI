@@ -9,6 +9,7 @@ import {
     type PermissionMode,
     type PermissionRequest,
     type SessionSummary,
+    type Todo,
     type Usage,
 } from "@justai/shared";
 
@@ -42,6 +43,7 @@ export interface AgentSessionState {
     streamingThinking: string;
     tools: Record<string, ToolProgress>;
     permissions: PermissionRequest[];
+    todos: Todo[];
     run: RunStats | null;
     error: string;
 }
@@ -53,6 +55,7 @@ const INITIAL: AgentSessionState = {
     streamingThinking: "",
     tools: {},
     permissions: [],
+    todos: [],
     run: null,
     error: "",
 };
@@ -75,6 +78,7 @@ export function useAgentSession() {
             session: details.session,
             messages: details.messages,
             permissions: details.pendingPermissions,
+            todos: details.todos,
             ...(details.session.status === "running"
                 ? {}
                 : { streamingText: "", streamingThinking: "" }),
@@ -267,6 +271,9 @@ function applyEvent(state: AgentSessionState, event: AgentEvent): AgentSessionSt
         case "file.changed":
             // Дифф уже есть в результате инструмента; дерево и редактор обновляются по FILE_* событиям.
             return state;
+
+        case "todo.updated":
+            return { ...state, todos: event.todos };
 
         case "permission.request":
             return state.permissions.some(item => item.requestId === event.request.requestId)

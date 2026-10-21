@@ -27,6 +27,7 @@ import type { AgentProfiles } from "../profiles.js";
 import { projectTree, readProjectRules } from "../prompts/ProjectContext.js";
 import { buildSystemPrompt } from "../prompts/SystemPrompt.js";
 import type { ProviderRegistry } from "../providers/ProviderRegistry.js";
+import { latestTodos } from "../tools/todoTool.js";
 import type { ToolRegistry } from "../tools/ToolRegistry.js";
 import { AgentLoop, createMessage } from "./AgentLoop.js";
 import type { BudgetLimits } from "./Budget.js";
@@ -123,6 +124,7 @@ export class SessionManager {
             session: session.summary,
             messages: session.messages.map(publicMessage),
             pendingPermissions: this.deps.permissions.pendingFor(id),
+            todos: latestTodos(session.messages),
         };
     }
 

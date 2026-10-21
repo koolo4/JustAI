@@ -19,6 +19,7 @@ import {
 import { GitService } from "../infrastructure/git/GitService.js";
 import { SnapshotService } from "../infrastructure/git/SnapshotService.js";
 import { createGitTools } from "../modules/agent/tools/gitTools.js";
+import { createTodoTool } from "../modules/agent/tools/todoTool.js";
 import { AccessGuard } from "../core/security/AccessGuard.js";
 
 import {
@@ -233,6 +234,7 @@ export class Container {
             ...createSearchTools(agentFiles),
             ...createShellTools(agentFiles, this.processManager),
             ...createGitTools(this.gitService, this.workspaceRoot),
+            createTodoTool(),
             ...createWordTools(this.microsoftGraph),
         ]) {
             this.toolRegistry.register(tool);

@@ -1,6 +1,6 @@
 import type { Message, Usage } from "./messages.js";
 import type { PermissionDecision, PermissionRequest } from "./permissions.js";
-import type { SessionStatus } from "./sessions.js";
+import type { SessionStatus, Todo } from "./sessions.js";
 
 /**
  * События сессии агента, передаются во фронт по WebSocket (MASTER_PLAN, раздел 5.4).
@@ -16,6 +16,7 @@ export type AgentEvent =
     | { type: "budget.updated"; sessionId: string; usage: Usage; steps: number }
     /** Агент изменил файл. diff — unified diff. */
     | { type: "file.changed"; sessionId: string; path: string; diff: string }
+    | { type: "todo.updated"; sessionId: string; todos: Todo[] }
     | { type: "permission.request"; sessionId: string; request: PermissionRequest }
     | { type: "permission.resolved"; sessionId: string; requestId: string; decision: PermissionDecision };
 
