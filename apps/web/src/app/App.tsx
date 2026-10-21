@@ -18,7 +18,7 @@ import { FileTree } from "../components/FileTree";
 
 import { FileViewer } from "../components/FileViewer";
 
-import { AIChat } from "../components/AIChat";
+import { AgentChat } from "../components/AgentChat";
 
 export function App() {
 
@@ -202,7 +202,7 @@ export function App() {
 
                 <aside className="panel right">
 
-                    <AIChat />
+                    <AgentChat />
 
                 </aside>
 

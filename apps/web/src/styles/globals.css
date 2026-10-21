@@ -100,9 +100,17 @@ button {
 }
 
 .ai-selects {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    margin-top: 10px;
+}
+
+.ai-selects label {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 3px;
+    min-width: 0;
 }
 
 .ai-header select {
@@ -110,7 +118,11 @@ button {
     color: #e8edf2;
     border: 1px solid #303842;
     padding: 7px 9px;
-    max-width: 190px;
+    width: 100%;
+}
+
+.ai-header select:disabled {
+    opacity: .6;
 }
 
 .muted {
@@ -232,12 +244,108 @@ button {
     cursor: default;
 }
 
+.message pre + pre,
+.message pre + .tool-card,
+.message .tool-card + pre {
+    margin-top: 8px;
+}
+
+.thinking {
+    margin-bottom: 8px;
+    color: #9aa7b5;
+    font-size: 12px;
+}
+
+.thinking summary {
+    cursor: pointer;
+}
+
+.thinking pre {
+    margin-top: 6px;
+    padding-left: 10px;
+    border-left: 2px solid #303842;
+    font-style: italic;
+}
+
+.tool-card {
+    margin-top: 6px;
+    border: 1px solid #2b333d;
+    border-radius: 7px;
+    background: #12161b;
+    font-size: 12px;
+}
+
+.tool-card summary {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    padding: 6px 8px;
+    cursor: pointer;
+    list-style: none;
+}
+
+.tool-card summary::-webkit-details-marker {
+    display: none;
+}
+
+.tool-status {
+    width: 12px;
+    text-align: center;
+}
+
+.tool-card.done .tool-status { color: #68d391; }
+.tool-card.error .tool-status { color: #fc8181; }
+.tool-card.running .tool-status { color: #f6ad55; }
+
+.tool-input {
+    color: #8e9aa8;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
+.tool-detail {
+    margin: 0;
+    padding: 8px;
+    border-top: 1px solid #242a32;
+    max-height: 280px;
+    overflow: auto;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace !important;
+    font-size: 12px;
+}
+
+.message.streaming {
+    border: 1px dashed #303842;
+}
+
+.run-stats {
+    font-size: 11px;
+}
+
+.ai-input .stop-button {
+    background: #b91c1c;
+}
+
 @media (max-width: 1100px) {
     .layout {
         grid-template-columns: 220px minmax(0, 1fr);
+        grid-auto-rows: minmax(0, 1fr);
+        overflow: auto;
     }
 
     .layout > .right {
-        display: none;
+        grid-column: 1 / -1;
+        min-height: 520px;
+    }
+}
+
+@media (max-width: 700px) {
+    .layout {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .ai-selects {
+        grid-template-columns: minmax(0, 1fr);
     }
 }

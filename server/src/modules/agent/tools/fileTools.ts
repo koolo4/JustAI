@@ -44,7 +44,8 @@ export function createFileTools(
         kind: "read",
         run: async ({ path: file, offset = 1, limit = DEFAULT_READ_LIMIT }) => {
             const absolute = await resolve(file, "read");
-            const content = await readText(absolute, file);
+            // BOM не показываем модели: иначе он попадёт в old_string при правке.
+            const content = (await readText(absolute, file)).replace(/^﻿/, "");
             const lines = content.split(/\r?\n/);
             const slice = lines.slice(offset - 1, offset - 1 + limit);
 
