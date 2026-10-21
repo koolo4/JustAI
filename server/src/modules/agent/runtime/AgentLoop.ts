@@ -21,7 +21,11 @@ import {
 import type { Authorizer } from "../permissions/PermissionService.js";
 import { ToolError, type Tool } from "../tools/Tool.js";
 import { toToolSpec } from "../tools/ToolRegistry.js";
+import { DELEGATE_TOOL } from "../tools/delegateTool.js";
 import { Budget, type BudgetLimits } from "./Budget.js";
+import { formatVerificationFailure, type VerificationOutcome } from "./Verifier.js";
+
+const DEFAULT_VERIFY_ATTEMPTS = 3;
 
 /** Лимит текста результата инструмента, который увидит модель. */
 export const MAX_TOOL_OUTPUT_CHARS = 30_000;
@@ -45,6 +49,9 @@ export interface AgentLoopOptions {
     authorizer?: Authorizer;
     /** Вызывается перед каждым изменяющим инструментом (снапшот для отката). */
     beforeMutation?: () => Promise<void>;
+    /** Автоматическая проверка проекта перед завершением, если были правки. */
+    verify?: (signal: AbortSignal) => Promise<VerificationOutcome>;
+    maxVerifyAttempts?: number;
     /** Сохранить новое сообщение (вызывается для каждого сообщения по порядку). */
     onMessage(message: Message): Promise<void>;
 }
@@ -68,6 +75,13 @@ export class AgentLoop {
     private readonly budget: Budget;
 
     private readonly toolsByName: Map<string, Tool>;
+
+    /** Файлы менялись после последней проверки. */
+    private changedSinceVerify = false;
+
+    private lastVerifyFailed = false;
+
+    private verifyAttempts = 0;
 
     constructor(
         private readonly options: AgentLoopOptions,
@@ -156,7 +170,17 @@ export class AgentLoop {
                     continue;
                 }
 
-                return this.result("completed");
+                const verdict = await this.verifyBeforeFinishing(add);
+
+                if (verdict.continue) {
+                    continue;
+                }
+
+                if (this.options.signal.aborted) {
+                    return this.result("stopped", "Stopped by user.");
+                }
+
+                return this.result("completed", verdict.reason);
             }
 
             // Вход инструмента, обрезанный по max_tokens, часто выглядит валидным — не выполняем.
@@ -169,6 +193,54 @@ export class AgentLoop {
 
             await add(createMessage("user", results));
         }
+    }
+
+    /**
+     * Перед завершением: если были правки — автоматическая проверка проекта.
+     * Провал → сообщение модели и ещё один круг (не больше maxVerifyAttempts).
+     */
+    private async verifyBeforeFinishing(
+        add: (message: Message) => Promise<void>,
+    ): Promise<{ continue: boolean; reason?: string }> {
+        const { verify } = this.options;
+        const maxAttempts = this.options.maxVerifyAttempts ?? DEFAULT_VERIFY_ATTEMPTS;
+
+        if (!verify) {
+            return { continue: false };
+        }
+
+        if (!this.changedSinceVerify) {
+            return this.lastVerifyFailed
+                ? { continue: false, reason: "Automatic checks are failing (see the last check above)." }
+                : { continue: false };
+        }
+
+        if (this.verifyAttempts >= maxAttempts) {
+            return { continue: false, reason: `Automatic checks still fail after ${maxAttempts} attempts.` };
+        }
+
+        this.verifyAttempts += 1;
+        this.changedSinceVerify = false;
+
+        const outcome = await verify(this.options.signal);
+
+        if (outcome.status !== "failed") {
+            this.lastVerifyFailed = false;
+            return { continue: false };
+        }
+
+        this.lastVerifyFailed = true;
+
+        if (this.options.signal.aborted) {
+            return { continue: false };
+        }
+
+        await add(createMessage("user", [{
+            type: "text",
+            text: formatVerificationFailure(outcome, this.verifyAttempts, maxAttempts),
+        }]));
+
+        return { continue: true };
     }
 
     private async callModel(messages: Message[]): Promise<ModelTurn> {
@@ -316,6 +388,10 @@ export class AgentLoop {
         }
 
         content = truncateOutput(content);
+
+        if (!isError && (tool.kind === "write" || tool.name === DELEGATE_TOOL)) {
+            this.changedSinceVerify = true;
+        }
 
         this.options.emit({
             type: "tool.finished",

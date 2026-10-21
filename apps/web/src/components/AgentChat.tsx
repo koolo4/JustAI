@@ -32,6 +32,8 @@ export function AgentChat() {
     const [profile, setProfile] = useState("coder");
     const [mode, setMode] = useState<PermissionMode>("ask");
     const [executorProvider, setExecutorProvider] = useState("ollama");
+    const [verify, setVerify] = useState(true);
+    const verifyEnabled = agent.session?.verify ?? verify;
     const [prompt, setPrompt] = useState("");
     const [loadError, setLoadError] = useState("");
 
@@ -92,6 +94,7 @@ export function AgentChat() {
             profile,
             provider,
             mode,
+            verify,
             ...(profile === "planner" ? { executorProvider } : {}),
             ...(activeFile ? { activeFile } : {}),
         });
@@ -178,7 +181,7 @@ export function AgentChat() {
                             onChange={event => {
                                 const next = event.target.value as PermissionMode;
                                 setMode(next);
-                                void agent.setMode(next);
+                                void agent.update({ mode: next });
                             }}
                             title={MODE_HINTS[agent.session?.mode ?? mode]}
                         >
@@ -186,6 +189,18 @@ export function AgentChat() {
                             <option value="auto-edit">Auto: edits + safe commands</option>
                             <option value="full-auto">Full auto (asks for dangerous)</option>
                         </select>
+                    </label>
+
+                    <label className="checkbox-label" title="Run the project's type check and tests after the agent changes files, and let it fix failures.">
+                        <input
+                            type="checkbox"
+                            checked={verifyEnabled}
+                            onChange={event => {
+                                setVerify(event.target.checked);
+                                void agent.update({ verify: event.target.checked });
+                            }}
+                        />
+                        <span className="muted">Auto-check after changes</span>
                     </label>
 
                     <label>
@@ -238,6 +253,32 @@ export function AgentChat() {
                         tools={agent.tools}
                     />
                 ))}
+
+                {agent.verification && agent.verification.checks.length > 0 && (
+                    <div className={`verification-card ${agent.verification.status}`}>
+                        <strong>
+                            {agent.verification.status === "running"
+                                ? "Running project checks…"
+                                : agent.verification.status === "passed"
+                                    ? "Project checks passed"
+                                    : agent.verification.status === "failed"
+                                        ? "Project checks failed — the agent is fixing it"
+                                        : "Project checks skipped"}
+                        </strong>
+                        <ul>
+                            {agent.verification.checks.map((check, index) => (
+                                <li key={index}>
+                                    <span className="todo-mark">
+                                        {agent.verification!.status === "running" ? "…" : check.skipped ? "–" : check.ok ? "✓" : "✕"}
+                                    </span>
+                                    <code>{check.command}</code>
+                                    {check.cwd !== "." && <span className="muted"> in {check.cwd}</span>}
+                                    {check.skipped && <span className="muted"> ({check.skipped})</span>}
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                )}
 
                 {agent.permissions.map(request => (
                     <PermissionCard

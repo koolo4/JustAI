@@ -23,6 +23,7 @@ import { createTodoTool } from "../modules/agent/tools/todoTool.js";
 import { createWebTools } from "../modules/agent/tools/webTools.js";
 import { createDelegateTool } from "../modules/agent/tools/delegateTool.js";
 import { ExecutorRunner } from "../modules/agent/runtime/ExecutorRunner.js";
+import { Verifier, verifyKindsFromEnv } from "../modules/agent/runtime/Verifier.js";
 import { AccessGuard } from "../core/security/AccessGuard.js";
 
 import {
@@ -285,6 +286,12 @@ export class Container {
                 shouldIgnore,
                 limits: budgetFromEnv(),
                 permissions,
+                verifier: new Verifier({
+                    processes: this.processManager,
+                    workspaceRoot: this.workspaceRoot,
+                    kinds: verifyKindsFromEnv(process.env.JUSTAI_VERIFY),
+                    timeoutMs: Number(process.env.JUSTAI_VERIFY_TIMEOUT_MS) || 300_000,
+                }),
                 executor: {
                     defaultProvider: process.env.JUSTAI_EXECUTOR_PROVIDER || "ollama",
                     runner: executorRunner,

@@ -23,13 +23,17 @@ const createSessionSchema = z.object({
     provider: z.string().min(1).optional(),
     model: z.string().min(1).optional(),
     mode: z.enum(PERMISSION_MODES as [PermissionMode, ...PermissionMode[]]).optional(),
+    executorProvider: z.string().min(1).optional(),
+    executorModel: z.string().min(1).optional(),
+    verify: z.boolean().optional(),
 });
 
 const modeSchema = z.enum(PERMISSION_MODES as [PermissionMode, ...PermissionMode[]]);
 
 const updateSessionSchema = z.object({
-    mode: modeSchema,
-});
+    mode: modeSchema.optional(),
+    verify: z.boolean().optional(),
+}).refine(value => value.mode !== undefined || value.verify !== undefined, "Pass mode and/or verify.");
 
 const resolvePermissionSchema = z.object({
     decision: z.enum(["allow", "allow_always", "deny"]),
@@ -87,7 +91,10 @@ export class AgentController {
 
     public updateSession = handle(async (req, res) => {
         const input = parse(updateSessionSchema, req.body);
-        const session = await this.sessions.setMode(sessionId(req), input.mode);
+        const session = await this.sessions.update(sessionId(req), {
+            ...(input.mode ? { mode: input.mode } : {}),
+            ...(input.verify !== undefined ? { verify: input.verify } : {}),
+        });
         res.json({ session });
     });
 

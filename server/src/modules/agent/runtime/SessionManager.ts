@@ -31,6 +31,7 @@ import { DELEGATE_TOOL, type DelegateInput } from "../tools/delegateTool.js";
 import { latestTodos } from "../tools/todoTool.js";
 import { ToolError, type ToolContext } from "../tools/Tool.js";
 import { formatExecutorResult, type ExecutorRunner } from "./ExecutorRunner.js";
+import type { VerificationOutcome, Verifier } from "./Verifier.js";
 import type { ToolRegistry } from "../tools/ToolRegistry.js";
 import { AgentLoop, createMessage } from "./AgentLoop.js";
 import type { BudgetLimits } from "./Budget.js";
@@ -49,6 +50,8 @@ export interface SessionManagerDeps {
     snapshots?: SnapshotService;
     /** Уведомить UI о файлах, восстановленных откатом. */
     onReverted?: (changes: SnapshotChange[]) => Promise<void>;
+    /** Автоматическая проверка проекта после правок. */
+    verifier?: Verifier;
     /** Исполнитель для профилей с delegate_task. */
     executor?: {
         defaultProvider: string;
@@ -110,6 +113,7 @@ export class SessionManager {
             provider: provider.id,
             model: provider.model,
             mode: request.mode ?? "ask",
+            verify: request.verify ?? true,
             ...(executor ? { executor } : {}),
             status: "idle",
             createdAt: now,
@@ -199,16 +203,28 @@ export class SessionManager {
     }
 
     /**
-     * Меняет режим разрешений. Действует сразу, в том числе на работающий цикл.
+     * Меняет режим разрешений и автопроверку. Действует сразу, в том числе на работающий цикл.
      */
-    public async setMode(id: string, mode: PermissionMode): Promise<SessionSummary> {
+    public async update(id: string, changes: { mode?: PermissionMode; verify?: boolean }): Promise<SessionSummary> {
         const session = await this.load(id);
 
-        session.summary.mode = mode;
+        if (changes.mode) {
+            session.summary.mode = changes.mode;
+        }
+
+        if (changes.verify !== undefined) {
+            session.summary.verify = changes.verify;
+        }
+
         session.summary.updatedAt = new Date().toISOString();
         await this.deps.store.updateSummary(session.summary);
 
         return session.summary;
+    }
+
+    /** @deprecated используйте update(id, { mode }). */
+    public setMode(id: string, mode: PermissionMode): Promise<SessionSummary> {
+        return this.update(id, { mode });
     }
 
     public async resolvePermission(
@@ -298,6 +314,7 @@ export class SessionManager {
                 chunk: `${line}\n`,
             }),
             emit: this.deps.emit,
+            ...this.verifyOption(summary, ["run_command"]),
         });
 
         summary.usage = addUsage(summary.usage, result.usage);
@@ -339,6 +356,7 @@ export class SessionManager {
                 ...(this.deps.snapshots?.available
                     ? { beforeMutation: () => this.deps.snapshots!.ensure(summary.id) }
                     : {}),
+                ...this.verifyOption(summary, profile.tools),
                 onMessage: message => this.addMessage(session, message),
             });
 
@@ -352,6 +370,59 @@ export class SessionManager {
         catch (error) {
             await this.setStatus(session, "failed", error instanceof Error ? error.message : String(error));
         }
+    }
+
+    /**
+     * Автопроверка для цикла: только для профилей, которые меняют код, и если она не выключена в сессии.
+     * Команды проверки проходят те же разрешения, что и run_command.
+     */
+    private verifyOption(
+        summary: SessionSummary,
+        profileTools: readonly string[],
+    ): { verify?: (signal: AbortSignal) => Promise<VerificationOutcome> } {
+        const verifier = this.deps.verifier;
+        const runTool = this.deps.tools.get("run_command");
+        const changesCode = profileTools.includes("run_command") || profileTools.includes(DELEGATE_TOOL);
+
+        if (!verifier?.enabled || !runTool || !changesCode || summary.verify === false) {
+            return {};
+        }
+
+        const authorizer = this.deps.permissions.forSession(summary.id, () => summary.mode);
+
+        return {
+            verify: async signal => {
+                const planned = await verifier.plan();
+
+                this.deps.emit({
+                    type: "verification",
+                    sessionId: summary.id,
+                    status: "running",
+                    checks: planned.map(check => ({ ...check, ok: false, exitCode: null })),
+                });
+
+                const outcome = await verifier.run({
+                    owner: summary.id,
+                    signal,
+                    authorize: (command, cwd) => authorizer.authorize({
+                        sessionId: summary.id,
+                        toolUseId: `verify-${randomUUID()}`,
+                        tool: runTool,
+                        input: { command, cwd },
+                        signal,
+                    }),
+                });
+
+                this.deps.emit({
+                    type: "verification",
+                    sessionId: summary.id,
+                    status: outcome.status,
+                    checks: outcome.checks.map(({ output: _output, ...check }) => check),
+                });
+
+                return outcome;
+            },
+        };
     }
 
     private async addMessage(session: StoredSession, message: Message): Promise<void> {

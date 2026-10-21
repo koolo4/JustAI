@@ -11,6 +11,7 @@ import {
     type SessionSummary,
     type Todo,
     type Usage,
+    type VerificationCheck,
 } from "@justai/shared";
 
 import {
@@ -44,6 +45,7 @@ export interface AgentSessionState {
     tools: Record<string, ToolProgress>;
     permissions: PermissionRequest[];
     todos: Todo[];
+    verification: { status: "running" | "passed" | "failed" | "skipped"; checks: VerificationCheck[] } | null;
     run: RunStats | null;
     error: string;
 }
@@ -56,6 +58,7 @@ const INITIAL: AgentSessionState = {
     tools: {},
     permissions: [],
     todos: [],
+    verification: null,
     run: null,
     error: "",
 };
@@ -149,6 +152,7 @@ export function useAgentSession() {
                     ...(options.mode ? { mode: options.mode } : {}),
                     ...(options.executorProvider ? { executorProvider: options.executorProvider } : {}),
                     ...(options.executorModel ? { executorModel: options.executorModel } : {}),
+                    ...(options.verify !== undefined ? { verify: options.verify } : {}),
                 });
 
                 id = session.id;
@@ -156,7 +160,7 @@ export function useAgentSession() {
                 setState({ ...INITIAL, session });
             }
 
-            setState(previous => ({ ...previous, error: "", run: null, tools: {} }));
+            setState(previous => ({ ...previous, error: "", run: null, tools: {}, verification: null }));
 
             const session = await sendMessage(id, {
                 text,
@@ -186,7 +190,7 @@ export function useAgentSession() {
         }
     }, [reload, fail]);
 
-    const setMode = useCallback(async (mode: PermissionMode) => {
+    const update = useCallback(async (changes: { mode?: PermissionMode; verify?: boolean }) => {
         const id = sessionIdRef.current;
 
         if (!id) {
@@ -194,7 +198,7 @@ export function useAgentSession() {
         }
 
         try {
-            const session = await updateSession(id, { mode });
+            const session = await updateSession(id, changes);
             setState(previous => ({ ...previous, session }));
         }
         catch (error) {
@@ -219,7 +223,7 @@ export function useAgentSession() {
         }
     }, [reload, fail]);
 
-    return { ...state, open, reset, send, stop, setMode, answer };
+    return { ...state, open, reset, send, stop, update, answer };
 }
 
 function applyEvent(state: AgentSessionState, event: AgentEvent): AgentSessionState {
@@ -276,6 +280,9 @@ function applyEvent(state: AgentSessionState, event: AgentEvent): AgentSessionSt
 
         case "todo.updated":
             return { ...state, todos: event.todos };
+
+        case "verification":
+            return { ...state, verification: { status: event.status, checks: event.checks } };
 
         case "permission.request":
             return state.permissions.some(item => item.requestId === event.request.requestId)

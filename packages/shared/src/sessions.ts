@@ -17,6 +17,8 @@ export interface SessionSummary {
     mode: PermissionMode;
     /** Исполнитель для профиля «планировщик» (delegate_task). */
     executor?: ExecutorConfig;
+    /** Автоматически запускать проверки проекта после правок (по умолчанию да). */
+    verify?: boolean;
     status: SessionStatus;
     createdAt: string;
     updatedAt: string;
@@ -35,4 +37,14 @@ export interface Todo {
 export interface ExecutorConfig {
     provider: string;
     model: string;
+}
+
+export interface VerificationCheck {
+    /** Папка проекта относительно workspace. */
+    cwd: string;
+    command: string;
+    ok: boolean;
+    exitCode: number | null;
+    /** Почему проверка не запускалась (например, пользователь не разрешил). */
+    skipped?: string;
 }

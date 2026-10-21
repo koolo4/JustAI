@@ -16,6 +16,7 @@ import type { ProviderRegistry } from "../providers/ProviderRegistry.js";
 import type { ToolRegistry } from "../tools/ToolRegistry.js";
 import { AgentLoop, createMessage, type AgentLoopStatus } from "./AgentLoop.js";
 import type { BudgetLimits } from "./Budget.js";
+import type { VerificationOutcome } from "./Verifier.js";
 
 export const EXECUTOR_PROFILE = "executor";
 
@@ -41,6 +42,8 @@ export interface ExecutorRunRequest {
     progress: (line: string) => void;
     /** События, которые нужно пробросить в UI как есть (изменения файлов). */
     emit: (event: AgentEvent) => void;
+    /** Автопроверка после правок исполнителя: он сам исправляет то, что сломал. */
+    verify?: (signal: AbortSignal) => Promise<VerificationOutcome>;
 }
 
 export interface ExecutorAction {
@@ -114,6 +117,7 @@ export class ExecutorRunner {
 
                     case "file.changed":
                     case "todo.updated":
+                    case "verification":
                         request.emit(event);
                         break;
 
@@ -124,6 +128,17 @@ export class ExecutorRunner {
             authorizer: this.deps.permissions.forSession(request.sessionId, request.mode),
             ...(this.deps.snapshots?.available
                 ? { beforeMutation: () => this.deps.snapshots!.ensure(request.sessionId) }
+                : {}),
+            ...(request.verify
+                ? {
+                    verify: async (signal: AbortSignal) => {
+                        request.progress("Running project checks…");
+                        const outcome = await request.verify!(signal);
+                        request.progress(`Checks ${outcome.status}: ${outcome.checks.map(check => `${check.ok ? "✓" : "✕"} ${check.command}`).join(", ") || "none"}`);
+                        return outcome;
+                    },
+                    maxVerifyAttempts: 2,
+                }
                 : {}),
             onMessage: async message => {
                 messages.push(message);

@@ -388,6 +388,35 @@ button {
     grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.verification-card {
+    border: 1px solid #2b333d;
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 12px;
+    background: #12161b;
+}
+
+.verification-card.passed { border-color: #2f855a; }
+.verification-card.failed { border-color: #c53030; }
+.verification-card.running { border-color: #b7791f; }
+
+.verification-card ul {
+    list-style: none;
+    margin: 6px 0 0;
+    padding: 0;
+}
+
+.verification-card code {
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.checkbox-label {
+    flex-direction: row !important;
+    align-items: center;
+    gap: 6px !important;
+    align-self: end;
+}
+
 .todo-list {
     margin-top: 10px;
     border: 1px solid #2b333d;

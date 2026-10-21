@@ -12,10 +12,12 @@ export interface CreateSessionRequest {
     /** Для профиля «планировщик»: провайдер и модель исполнителя. */
     executorProvider?: string;
     executorModel?: string;
+    verify?: boolean;
 }
 
 export interface UpdateSessionRequest {
-    mode: PermissionMode;
+    mode?: PermissionMode;
+    verify?: boolean;
 }
 
 export interface ResolvePermissionRequest {

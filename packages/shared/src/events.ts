@@ -1,6 +1,6 @@
 import type { Message, Usage } from "./messages.js";
 import type { PermissionDecision, PermissionRequest } from "./permissions.js";
-import type { SessionStatus, Todo } from "./sessions.js";
+import type { SessionStatus, Todo, VerificationCheck } from "./sessions.js";
 
 /**
  * События сессии агента, передаются во фронт по WebSocket (MASTER_PLAN, раздел 5.4).
@@ -17,6 +17,8 @@ export type AgentEvent =
     /** Агент изменил файл. diff — unified diff. */
     | { type: "file.changed"; sessionId: string; path: string; diff: string }
     | { type: "todo.updated"; sessionId: string; todos: Todo[] }
+    /** Автоматическая проверка проекта после правок агента. */
+    | { type: "verification"; sessionId: string; status: "running" | "passed" | "failed" | "skipped"; checks: VerificationCheck[] }
     | { type: "permission.request"; sessionId: string; request: PermissionRequest }
     | { type: "permission.resolved"; sessionId: string; requestId: string; decision: PermissionDecision };
 
@@ -31,5 +33,5 @@ export function isAgentEvent(value: unknown): value is AgentEvent {
 
     return typeof record.type === "string" &&
         typeof record.sessionId === "string" &&
-        /^(session|assistant|message|tool|budget|file|todo|permission)\./.test(record.type);
+        (/^(session|assistant|message|tool|budget|file|todo|permission)\./.test(record.type) || record.type === "verification");
 }
