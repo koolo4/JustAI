@@ -34,6 +34,8 @@ export interface ExecutorRunnerDeps {
 export interface ExecutorRunRequest {
     /** Сессия планировщика: разрешения, снапшот и события привязаны к ней. */
     sessionId: string;
+    /** Профиль помощника (по умолчанию executor). */
+    profile?: string;
     executor: ExecutorConfig;
     mode: () => PermissionMode;
     task: string;
@@ -73,7 +75,7 @@ export class ExecutorRunner {
     ) {}
 
     public async run(request: ExecutorRunRequest): Promise<ExecutorRunResult> {
-        const profile = this.deps.profiles.get(EXECUTOR_PROFILE);
+        const profile = this.deps.profiles.get(request.profile ?? EXECUTOR_PROFILE);
         const tools = this.deps.tools.select(profile.tools);
         const provider = this.deps.providers.create(request.executor.provider, request.executor.model);
 
@@ -89,7 +91,7 @@ export class ExecutorRunner {
         const calls = new Map<string, { tool: string; summary: string }>();
         const actions: ExecutorAction[] = [];
 
-        request.progress(`Executor ${provider.id} / ${provider.model} started.`);
+        request.progress(`${profile.label} ${provider.id} / ${provider.model} started.`);
 
         const loop = new AgentLoop({
             sessionId: request.sessionId,
@@ -159,7 +161,7 @@ export class ExecutorRunner {
         const result = await loop.run([createMessage("user", [{ type: "text", text: request.task }])]);
         const report = lastAssistantText(messages);
 
-        request.progress(`Executor ${result.status} after ${result.steps} step(s).`);
+        request.progress(`${profile.label} ${result.status} after ${result.steps} step(s).`);
 
         return {
             status: result.status,

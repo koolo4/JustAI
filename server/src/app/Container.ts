@@ -24,6 +24,7 @@ import { createGitTools } from "../modules/agent/tools/gitTools.js";
 import { createTodoTool } from "../modules/agent/tools/todoTool.js";
 import { createWebTools } from "../modules/agent/tools/webTools.js";
 import { createDelegateTool } from "../modules/agent/tools/delegateTool.js";
+import { createSpawnTool } from "../modules/agent/tools/spawnTool.js";
 import { ExecutorRunner } from "../modules/agent/runtime/ExecutorRunner.js";
 import { Verifier, verifyKindsFromEnv } from "../modules/agent/runtime/Verifier.js";
 import { AccessGuard } from "../core/security/AccessGuard.js";
@@ -254,6 +255,7 @@ export class Container {
             ...createWordTools(this.microsoftGraph),
             // SessionManager создаётся ниже — связываем лениво.
             createDelegateTool(() => (input, context) => this.sessionManager.delegate(input, context)),
+            createSpawnTool(() => (input, context) => this.sessionManager.spawn(input, context)),
         ]) {
             this.toolRegistry.register(tool);
         }
@@ -303,6 +305,9 @@ export class Container {
                     kinds: verifyKindsFromEnv(process.env.JUSTAI_VERIFY),
                     timeoutMs: Number(process.env.JUSTAI_VERIFY_TIMEOUT_MS) || 300_000,
                 }),
+                ...(process.env.JUSTAI_SUBAGENT_PROVIDER
+                    ? { subagentProvider: process.env.JUSTAI_SUBAGENT_PROVIDER }
+                    : {}),
                 executor: {
                     defaultProvider: process.env.JUSTAI_EXECUTOR_PROVIDER || "ollama",
                     runner: executorRunner,

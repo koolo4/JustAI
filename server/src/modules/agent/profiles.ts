@@ -18,6 +18,7 @@ const CODE_TOOLS = [
     "run_command", "read_output", "kill_process", "list_processes",
     "git_status", "git_diff", "git_log", "git_commit", "web_fetch",
     ...BROWSER_TOOLS,
+    "spawn_agent",
 ];
 
 const PROFILES: AgentProfile[] = [
@@ -37,7 +38,7 @@ const PROFILES: AgentProfile[] = [
         id: "planner",
         label: "Planner + local executor",
         description: "A strong model plans and reviews; a local model (Ollama) edits files and runs commands.",
-        tools: ["todo_write", "read_file", "list_dir", "glob", "grep", "git_status", "git_diff", "git_log", "web_fetch", ...BROWSER_READ_TOOLS, "delegate_task"],
+        tools: ["todo_write", "read_file", "list_dir", "glob", "grep", "git_status", "git_diff", "git_log", "web_fetch", ...BROWSER_READ_TOOLS, "spawn_agent", "delegate_task"],
         instructions: [
             "You are the planner in a two-agent setup. You cannot edit files or run commands yourself:",
             "a local executor model does that when you call delegate_task. You read code, plan, delegate and review.",
@@ -50,6 +51,19 @@ const PROFILES: AgentProfile[] = [
             "3. After each delegation, check the result yourself: read the changed files or git_diff, and look at the reported command results.",
             "   Do not trust the executor's summary alone. If something is wrong or missing, delegate a precise fix.",
             "4. Finish with a short summary for the user: what changed, how it was verified, what is left.",
+        ].join("\n"),
+    },
+    {
+        id: "docs",
+        label: "Docs Writer",
+        description: "Updates README, CHANGELOG and docs to match the code changes.",
+        tools: ["todo_write", "read_file", "list_dir", "glob", "grep", "edit_file", "write_file", "git_status", "git_diff", "git_log", "spawn_agent"],
+        instructions: [
+            "You keep the project's documentation in sync with the code.",
+            "Start from what changed: git_status, git_diff (and git_log for recent commits). Read the code you describe; never document behaviour you have not seen.",
+            "Update the existing documents in their own style and language: README usage and setup, CHANGELOG (add entries under the unreleased section, newest first), docs pages and API references.",
+            "Do not rewrite unrelated sections. If something is unclear from the code, say so in your final message instead of guessing.",
+            "Finish with the list of documents you changed and what you added.",
         ].join("\n"),
     },
     {
@@ -70,6 +84,31 @@ const PROFILES: AgentProfile[] = [
         instructions: [
             "You automate work with the user's Word documents in OneDrive.",
             "Preserve existing formatting. Return a Word/OneDrive link when one is available.",
+        ].join("\n"),
+    },
+    {
+        id: "explore",
+        label: "Explorer",
+        description: "Read-only helper that investigates the codebase and answers one question.",
+        hidden: true,
+        tools: ["read_file", "list_dir", "glob", "grep", "git_status", "git_log"],
+        instructions: [
+            "You are a read-only research helper. Another agent asked you one question about this codebase.",
+            "Search and read as much as needed, but never guess: base every statement on files you actually read.",
+            "Answer concisely: the facts that answer the question, with file paths and line numbers, and relevant snippets.",
+            "Do not propose large rewrites; you only report what is there.",
+        ].join("\n"),
+    },
+    {
+        id: "review",
+        label: "Reviewer",
+        description: "Read-only helper that reviews the current uncommitted changes.",
+        hidden: true,
+        tools: ["read_file", "list_dir", "glob", "grep", "git_status", "git_diff", "git_log"],
+        instructions: [
+            "You are a code reviewer. Review the current changes (use git_diff and read the surrounding code).",
+            "Report only real problems: bugs, broken edge cases, security issues, missing updates in related code, failing assumptions.",
+            "For each finding give the file and line, what is wrong, and a concrete fix. If the changes look correct, say so briefly.",
         ].join("\n"),
     },
     {

@@ -28,6 +28,7 @@ import type { AgentProfiles } from "../profiles.js";
 import { buildSessionPrompt } from "../prompts/sessionPrompt.js";
 import type { ProviderRegistry } from "../providers/ProviderRegistry.js";
 import { DELEGATE_TOOL, type DelegateInput } from "../tools/delegateTool.js";
+import type { SpawnInput } from "../tools/spawnTool.js";
 import { latestTodos } from "../tools/todoTool.js";
 import { ToolError, type ToolContext } from "../tools/Tool.js";
 import { formatExecutorResult, type ExecutorRunner } from "./ExecutorRunner.js";
@@ -52,6 +53,8 @@ export interface SessionManagerDeps {
     onReverted?: (changes: SnapshotChange[]) => Promise<void>;
     /** Автоматическая проверка проекта после правок. */
     verifier?: Verifier;
+    /** Провайдер read-only помощников (spawn_agent); по умолчанию — модель сессии. */
+    subagentProvider?: string;
     /** Исполнитель для профилей с delegate_task. */
     executor?: {
         defaultProvider: string;
@@ -330,6 +333,52 @@ export class SessionManager {
         }
 
         return text;
+    }
+
+    /**
+     * spawn_agent: read-only помощник (explore / review) на модели сессии
+     * или на JUSTAI_SUBAGENT_PROVIDER. Возвращает его ответ.
+     */
+    public async spawn(input: SpawnInput, context: ToolContext): Promise<string> {
+        const session = await this.load(context.sessionId);
+        const { summary } = session;
+
+        if (!this.deps.executor) {
+            throw new ToolError("Helper agents are not configured on this server.");
+        }
+
+        const provider = this.deps.subagentProvider
+            ? this.deps.providers.create(this.deps.subagentProvider)
+            : this.deps.providers.create(summary.provider, summary.model);
+        const helper = { provider: provider.id, model: provider.model };
+
+        const result = await this.deps.executor.runner.run({
+            sessionId: summary.id,
+            profile: input.kind,
+            executor: helper,
+            mode: () => summary.mode,
+            task: input.task,
+            signal: context.signal,
+            progress: line => context.emit({
+                type: "tool.progress",
+                sessionId: summary.id,
+                toolUseId: context.toolUseId,
+                chunk: `${line}\n`,
+            }),
+            emit: this.deps.emit,
+        });
+
+        summary.usage = addUsage(summary.usage, result.usage);
+
+        if (context.signal.aborted) {
+            throw new ToolError("Cancelled by user.");
+        }
+
+        if (result.status === "failed" || !result.report) {
+            throw new ToolError(`The ${input.kind} helper (${helper.provider}/${helper.model}) did not produce an answer${result.reason ? `: ${result.reason}` : "."}`);
+        }
+
+        return `${input.kind === "review" ? "Review" : "Findings"} from ${helper.provider}/${helper.model} (${result.steps} step(s)):\n\n${result.report}`;
     }
 
     /** Дождаться завершения цикла (для тестов). */
