@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-import { ForbiddenError } from '../../core/errors/ForbiddenError.js';
+import { isInside, resolveInside } from './safePath.js';
 
 export class PathResolver {
 
@@ -20,9 +20,10 @@ export class PathResolver {
      */
     public isInsideWorkspace(targetPath: string): boolean {
 
-        const absolute = path.resolve(this.workspaceRoot, targetPath);
-
-        return absolute.startsWith(this.workspaceRoot);
+        return isInside(
+            this.workspaceRoot,
+            path.resolve(this.workspaceRoot, targetPath),
+        );
 
     }
 
@@ -31,15 +32,7 @@ export class PathResolver {
      */
     public resolve(relativePath: string): string {
 
-        const absolute = path.resolve(this.workspaceRoot, relativePath);
-
-        if (!absolute.startsWith(this.workspaceRoot)) {
-            throw new ForbiddenError(
-                'Access outside workspace is forbidden.'
-            );
-        }
-
-        return absolute;
+        return resolveInside(this.workspaceRoot, relativePath);
 
     }
 

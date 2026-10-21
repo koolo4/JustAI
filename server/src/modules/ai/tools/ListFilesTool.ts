@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
-import path from "node:path";
+
+import { resolveSafePath } from "../../../infrastructure/filesystem/safePath.js";
 
 import type {
     AITool,
@@ -35,15 +36,7 @@ export class ListFilesTool implements AITool {
         const requestedPath = args.path || ".";
 
         try {
-            const absolute = path.resolve(this.workspaceRoot, requestedPath);
-            const relative = path.relative(this.workspaceRoot, absolute);
-
-            if (relative.startsWith("..") || path.isAbsolute(relative)) {
-                return {
-                    success: false,
-                    content: "Access denied: path is outside workspace.",
-                };
-            }
+            const absolute = await resolveSafePath(this.workspaceRoot, requestedPath, "read");
 
             const entries = await fs.readdir(absolute, { withFileTypes: true });
 
