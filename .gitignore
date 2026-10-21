@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+coverage/
+*.tsbuildinfo
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# JustAI local state (sessions, tokens, snapshots)
+.justai/
+
+# Compiled test artifacts
+server/tests/**/*.js
+server/tests/**/*.d.ts
+server/tests/**/*.map
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/settings.json
+
+# Generated repository dumps
+repomix-output.txt
