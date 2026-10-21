@@ -36,6 +36,19 @@ export class App {
 
         this.container.webSocketGateway.initialize();
 
+        // Фоновые процессы агента (dev-серверы) не должны пережить сервер.
+        for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+
+            process.once(signal, () => {
+
+                void this.container.processManager
+                    .killAll()
+                    .finally(() => process.exit(0));
+
+            });
+
+        }
+
         const logger =
             new WorkspaceLogger();
 

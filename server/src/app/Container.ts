@@ -27,6 +27,8 @@ import { SessionStore } from "../modules/agent/runtime/SessionStore.js";
 import { AgentFileSystem } from "../modules/agent/tools/AgentFileSystem.js";
 import { createFileTools } from "../modules/agent/tools/fileTools.js";
 import { createSearchTools } from "../modules/agent/tools/searchTools.js";
+import { createShellTools } from "../modules/agent/tools/shellTools.js";
+import { ProcessManager } from "../infrastructure/process/ProcessManager.js";
 
 import type { AgentEvent } from "@justai/shared";
 import { ToolRegistry } from "../modules/agent/tools/ToolRegistry.js";
@@ -60,6 +62,7 @@ export class Container {
     public readonly webSocketGateway:
         WebSocketGateway;
 
+    public readonly processManager: ProcessManager;
     public readonly toolRegistry: ToolRegistry;
     public readonly providerRegistry: ProviderRegistry;
     public readonly agentProfiles: AgentProfiles;
@@ -200,12 +203,16 @@ export class Container {
                 broadcast,
             );
 
+        this.processManager =
+            new ProcessManager();
+
         this.toolRegistry =
             new ToolRegistry();
 
         for (const tool of [
             ...createFileTools(agentFiles, shouldIgnore),
             ...createSearchTools(agentFiles),
+            ...createShellTools(agentFiles, this.processManager),
             ...createWordTools(this.microsoftGraph),
         ]) {
             this.toolRegistry.register(tool);
