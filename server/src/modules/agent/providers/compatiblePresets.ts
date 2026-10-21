@@ -57,7 +57,7 @@ export const COMPATIBLE_PRESETS: CompatiblePreset[] = [
         prefix: "GROQ",
         baseURL: "https://api.groq.com/openai/v1",
         keyEnv: ["GROQ_API_KEY"],
-        defaultModel: "llama-3.3-70b-versatile",
+        defaultModel: "openai/gpt-oss-120b",
         local: false,
         contextTokens: 128_000,
     },

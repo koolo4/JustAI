@@ -176,7 +176,15 @@ export class OpenAICompatibleProvider implements ModelProvider {
         }
 
         const content: ContentBlock[] = [];
-        let remainingText = text;
+
+        // «Думающие» модели (Qwen3, DeepSeek-R1) через некоторые серверы пишут рассуждения прямо в текст.
+        const { thinking, text: visibleText } = splitThinking(text);
+
+        if (thinking) {
+            content.push({ type: "thinking", text: thinking });
+        }
+
+        let remainingText = visibleText;
 
         let toolUses = [...calls.entries()]
             .sort(([a], [b]) => a - b)
@@ -189,8 +197,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
 
         let formatError: string | undefined;
 
-        if (toolUses.length === 0 && text) {
-            const extracted = extractTextToolCalls(text, toolNames);
+        if (toolUses.length === 0 && visibleText) {
+            const extracted = extractTextToolCalls(visibleText, toolNames);
             toolUses = extracted.calls;
             remainingText = extracted.text;
 
@@ -437,6 +445,28 @@ export function extractTextToolCalls(text: string, toolNames: Set<string>): Text
     );
 
     return { calls, text: remaining, malformed: attempted };
+}
+
+/**
+ * Отделяет рассуждения в <think>…</think> (в том числе незакрытый тег в начале ответа) от видимого текста.
+ */
+export function splitThinking(text: string): { thinking: string; text: string } {
+    const parts: string[] = [];
+
+    let visible = text.replace(/<think>([\s\S]*?)<\/think>/g, (_match, inner: string) => {
+        parts.push(inner.trim());
+        return "";
+    });
+
+    // Ответ оборвался внутри рассуждений.
+    const open = visible.indexOf("<think>");
+
+    if (open >= 0) {
+        parts.push(visible.slice(open + "<think>".length).trim());
+        visible = visible.slice(0, open);
+    }
+
+    return { thinking: parts.filter(Boolean).join("\n\n"), text: visible.trim() };
 }
 
 /**

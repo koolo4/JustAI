@@ -54,7 +54,8 @@ describe("browser tools", () => {
         catch {
             available = false;
         }
-    }, 60_000);
+        // Запуск браузера под нагрузкой (параллельные тесты, сборка) бывает долгим.
+    }, 180_000);
 
     afterAll(async () => {
         await browser.closeAll();

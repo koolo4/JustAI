@@ -11,6 +11,7 @@ import {
     isRepeating,
     OpenAICompatibleProvider,
     repairJson,
+    splitThinking,
     toChatMessages,
 } from "../../../src/modules/agent/providers/OpenAICompatibleProvider.js";
 import { ModelOutputError, type ModelStreamEvent, type ModelTurn } from "../../../src/modules/agent/providers/ModelProvider.js";
@@ -222,6 +223,17 @@ describe("extractTextToolCalls", () => {
         expect(result.calls).toEqual([]);
         expect(result.text).toBe(example);
         expect(extractTextToolCalls("<tool_call>{\"name\":\"rm_everything\"}</tool_call>", tools).calls).toEqual([]);
+    });
+});
+
+describe("splitThinking", () => {
+    it("moves <think> blocks out of the visible answer", () => {
+        expect(splitThinking("<think>\nNeed to read the file {\"name\":\"read_file\"}\n</think>\n\nReading now.")).toEqual({
+            thinking: "Need to read the file {\"name\":\"read_file\"}",
+            text: "Reading now.",
+        });
+        expect(splitThinking("Answer only.")).toEqual({ thinking: "", text: "Answer only." });
+        expect(splitThinking("<think>cut off mid-thought")).toEqual({ thinking: "cut off mid-thought", text: "" });
     });
 });
 
