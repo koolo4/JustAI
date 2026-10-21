@@ -12,7 +12,7 @@ const PROFILES: AgentProfile[] = [
         id: "coder",
         label: "Code Agent",
         description: "Reads, writes and edits code in the local workspace.",
-        tools: ["read_file", "list_dir", "edit_file", "write_file"],
+        tools: ["read_file", "list_dir", "glob", "grep", "edit_file", "write_file"],
         instructions: [
             "You are working as a senior software engineer on the user's project.",
             "Before changing code, read the relevant files and follow the conventions you find there.",
@@ -24,7 +24,7 @@ const PROFILES: AgentProfile[] = [
         id: "general",
         label: "General Agent",
         description: "Workspace files plus connected services (OneDrive / Word).",
-        tools: ["read_file", "list_dir", "edit_file", "write_file", "word_read", "word_edit"],
+        tools: ["read_file", "list_dir", "glob", "grep", "edit_file", "write_file", "word_read", "word_edit"],
         instructions: [
             "Help the user with their request using the available tools.",
             "Never claim that a change succeeded unless the tool result says so.",

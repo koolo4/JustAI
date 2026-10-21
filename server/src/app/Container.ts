@@ -26,6 +26,7 @@ import { SessionManager } from "../modules/agent/runtime/SessionManager.js";
 import { SessionStore } from "../modules/agent/runtime/SessionStore.js";
 import { AgentFileSystem } from "../modules/agent/tools/AgentFileSystem.js";
 import { createFileTools } from "../modules/agent/tools/fileTools.js";
+import { createSearchTools } from "../modules/agent/tools/searchTools.js";
 
 import type { AgentEvent } from "@justai/shared";
 import { ToolRegistry } from "../modules/agent/tools/ToolRegistry.js";
@@ -204,6 +205,7 @@ export class Container {
 
         for (const tool of [
             ...createFileTools(agentFiles, shouldIgnore),
+            ...createSearchTools(agentFiles),
             ...createWordTools(this.microsoftGraph),
         ]) {
             this.toolRegistry.register(tool);
