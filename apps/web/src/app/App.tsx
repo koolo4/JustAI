@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
-import { AgentChat } from "../components/AgentChat";
+import { AgentChat, type ReviewRequest } from "../components/AgentChat";
+import { DiffReview } from "../components/diff/DiffReview";
 import { FileTree } from "../components/FileTree";
 import { useIDEContext } from "../context/useIDEContext";
 import { CodeEditor } from "../editor/CodeEditor";
@@ -19,6 +20,7 @@ export function App() {
     } = useIDEContext();
 
     const [tree, setTree] = useState<WorkspaceNode[]>([]);
+    const [review, setReview] = useState<ReviewRequest | null>(null);
     const editor = useEditorTabs();
 
     function refreshTree() {
@@ -92,6 +94,18 @@ export function App() {
                 </aside>
 
                 <section className="panel center">
+                    {review ? (
+                        <DiffReview
+                            sessionId={review.sessionId}
+                            sessionTitle={review.title}
+                            busy={review.busy}
+                            onOpenFile={path => {
+                                setReview(null);
+                                handleSelect(path);
+                            }}
+                            onClose={() => setReview(null)}
+                        />
+                    ) : (
                     <CodeEditor
                         tabs={editor.tabs}
                         active={editor.active}
@@ -102,10 +116,11 @@ export function App() {
                         onTakeDisk={editor.takeDisk}
                         onKeepMine={editor.keepMine}
                     />
+                    )}
                 </section>
 
                 <aside className="panel right">
-                    <AgentChat />
+                    <AgentChat onReview={setReview} />
                 </aside>
             </main>
         </div>

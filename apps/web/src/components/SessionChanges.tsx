@@ -5,18 +5,19 @@ import type { SessionChangesResponse } from "@justai/shared";
 import { fetchSessionChanges, revertSession } from "../services/agentApi";
 
 /**
- * Изменения файлов за сессию (с момента первой правки агента) и откат.
- * Полноценный DiffReview с откатом по файлам — задача P4-03.
+ * Сводка изменений файлов за сессию (с момента первой правки агента), откат и переход к DiffReview.
  */
 export function SessionChanges({
     sessionId,
     refreshKey,
     disabled,
+    onReview,
 }: {
     sessionId: string;
     /** Меняется, когда стоит перечитать изменения (например, агент закончил работу). */
     refreshKey: string;
     disabled: boolean;
+    onReview?: () => void;
 }) {
     const [changes, setChanges] = useState<SessionChangesResponse | null>(null);
     const [busy, setBusy] = useState(false);
@@ -70,11 +71,14 @@ export function SessionChanges({
                 ))}
             </ul>
 
-            <pre className="tool-detail">{changes.diff.length > 20_000 ? `${changes.diff.slice(0, 20_000)}\n…` : changes.diff}</pre>
-
             {error && <div className="error">{error}</div>}
 
             <div className="permission-actions">
+                {onReview && (
+                    <button className="secondary-button" onClick={onReview}>
+                        Review diff
+                    </button>
+                )}
                 <button className="deny-button" onClick={() => void revert()} disabled={busy || disabled}>
                     {busy ? "Reverting…" : "Revert all"}
                 </button>

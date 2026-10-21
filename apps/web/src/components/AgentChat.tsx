@@ -21,7 +21,13 @@ import { fetchProfiles, fetchProviders, fetchSessions } from "../services/agentA
 import { IntegrationCard } from "./IntegrationCard";
 import { SessionChanges } from "./SessionChanges";
 
-export function AgentChat() {
+export interface ReviewRequest {
+    sessionId: string;
+    title: string;
+    busy: boolean;
+}
+
+export function AgentChat({ onReview }: { onReview?: (request: ReviewRequest) => void } = {}) {
     const { activeFile } = useIDEContext();
     const agent = useAgentSession();
 
@@ -317,6 +323,9 @@ export function AgentChat() {
                         sessionId={agent.session.id}
                         refreshKey={`${agent.session.status}:${agent.messages.length}`}
                         disabled={running}
+                        {...(onReview && agent.session
+                            ? { onReview: () => onReview({ sessionId: agent.session!.id, title: agent.session!.title, busy: running }) }
+                            : {})}
                     />
                 )}
 
