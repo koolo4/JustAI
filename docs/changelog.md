@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased — Phase 2: IDE-level tools (21.10.2026)
+
+### Added
+
+- Agent tools: `glob`, `grep` (ripgrep), `run_command` / `read_output` / `kill_process` / `list_processes`, `git_status` / `git_diff` / `git_log` / `git_commit`, `todo_write`, `web_fetch`.
+- Permission modes per session (`ask`, `auto-edit`, `full-auto`), command classifier (safe / unknown / dangerous), approval cards in the UI, project rules in `.justai/permissions.json`.
+- Restore points in a shadow git repository (`.justai/shadow.git`): session changes with diff and Revert all.
+- Task plan panel, live command output in tool cards, file tree and editor refresh on agent changes.
+- API: `PATCH /sessions/:id`, `POST /sessions/:id/permissions/:requestId`, `GET /sessions/:id/changes`, `POST /sessions/:id/revert`.
+
+### Changed
+
+- `edit_file` takes a list of edits applied atomically; editing or overwriting requires reading the file in the same session and fails if it changed since. BOM and CRLF are preserved.
+- Agent commands run non-interactively without API keys in their environment.
+
 ## Unreleased — Phase 1: Agent Runtime (21.10.2026)
 
 ### Added

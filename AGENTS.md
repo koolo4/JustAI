@@ -36,3 +36,5 @@ npm run dev:web                      # фронт на http://localhost:3000
 - Один логический коммит на задачу: `P1-04: краткое описание`.
 - Тесты кладутся в `server/tests/` зеркально `src/`; временные файлы — через `tests/helpers/tempWorkspace.ts`.
 - В Windows PowerShell 5.1 не читай/пиши UTF-8 файлы через `Get-Content`/`Set-Content` без `-Encoding utf8` — испортится кириллица.
+- В PowerShell 5.1 передавай сообщение коммита файлом (`git commit -F msg.txt`): двойные кавычки в аргументах нативных программ теряются.
+- Новый инструмент агента: файл в `server/src/modules/agent/tools/`, `defineTool` + zod-схема, правильный `kind` (от него зависят разрешения и снапшоты), регистрация в `Container`, имя в нужных профилях (`profiles.ts`), тесты.

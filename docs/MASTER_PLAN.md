@@ -276,17 +276,14 @@ export type AgentEvent =
   | { type: "tool.started"; sessionId: string; toolUseId: string; name: string; input: unknown }
   | { type: "tool.progress"; sessionId: string; toolUseId: string; chunk: string }      // stdout команды (P2-03)
   | { type: "tool.finished"; sessionId: string; toolUseId: string; isError: boolean; preview: string }
-  | { type: "budget.updated"; sessionId: string; usage: Usage; steps: number };
+  | { type: "budget.updated"; sessionId: string; usage: Usage; steps: number }
+  | { type: "file.changed"; sessionId: string; path: string; diff: string }              // P2-01
+  | { type: "todo.updated"; sessionId: string; todos: Todo[] }                           // P2-06
+  | { type: "permission.request"; sessionId: string; request: PermissionRequest }        // P2-04
+  | { type: "permission.resolved"; sessionId: string; requestId: string; decision: PermissionDecision };
 ```
 
-Будет добавлено соответствующими задачами:
-
-```ts
-  | { type: "permission.request"; sessionId: string; requestId: string; tool: string; input: unknown; reason: string } // P2-04
-  | { type: "file.changed"; sessionId: string; path: string; diff: string }   // P2-01
-  | { type: "todo.updated"; sessionId: string; todos: Todo[] }                // P2-06
-  | { type: "session.diff"; sessionId: string; diff: string }                 // P2-05, итоговый дифф сессии
-```
+Итоговый дифф сессии отдаётся не событием, а запросом `GET /sessions/:id/changes` (P2-05).
 
 ### 5.5 REST API (агент)
 
@@ -295,20 +292,15 @@ export type AgentEvent =
 ```
 GET    /api/agent/providers                    → { providers, defaultProvider }
 GET    /api/agent/profiles                     → { profiles }
-POST   /api/agent/sessions                     → 201 { session }         body: { profile?, provider?, model? }
+POST   /api/agent/sessions                     → 201 { session }         body: { profile?, provider?, model?, mode? }
 GET    /api/agent/sessions                     → { sessions }
-GET    /api/agent/sessions/:id                 → { session, messages }
+GET    /api/agent/sessions/:id                 → { session, messages, pendingPermissions, todos }
+PATCH  /api/agent/sessions/:id                 → { session }             body: { mode }  (действует сразу)
 POST   /api/agent/sessions/:id/messages        → 202 { session }         body: { text, activeFile? }   (409, если агент уже работает)
 POST   /api/agent/sessions/:id/stop            → { session }
-```
-
-Будет добавлено:
-
-```
-POST   /api/agent/sessions                     body: + mode                                            // P2-04
-POST   /api/agent/sessions/:id/permissions/:requestId   body: { decision: "allow" | "allow_always" | "deny", note? }  // P2-04
-POST   /api/agent/sessions/:id/revert          → откат к снапшоту                                      // P2-05
-GET    /api/agent/sessions/:id/diff            → итоговый дифф сессии                                  // P2-05
+POST   /api/agent/sessions/:id/permissions/:requestId → 204   body: { decision: "allow" | "allow_always" | "deny", note? }
+GET    /api/agent/sessions/:id/changes         → { available, files, diff }   изменения с момента первой правки
+POST   /api/agent/sessions/:id/revert          → { files }   откат к снапшоту (409, если агент работает)
 ```
 
 ---
@@ -442,35 +434,35 @@ GET    /api/agent/sessions/:id/diff            → итоговый дифф с�
 
 ### Фаза 2 — Инструменты уровня IDE (≈1–2 недели)
 
-**P2-01 · Файловые инструменты · TODO** · Зависит от: P1-04, P0-05
+**P2-01 · Файловые инструменты · DONE** · Зависит от: P1-04, P0-05
 - Инструменты: `read_file {path, offset?, limit?}` (с номерами строк), `write_file {path, content}`, `edit_file {path, edits: [{old, new, replaceAll?}]}`, `list_dir {path}`.
 - Требования: все записи — через `WorkspaceService` (события `file.changed` с диффом); `edit_file`/`write_file` существующего файла требуют, чтобы файл был прочитан в этой сессии и не изменился с тех пор (защита от затирания правок пользователя); сохранение кодировки и переводов строк (CRLF/LF).
 - DoD: юнит-тесты на каждый инструмент, включая неоднозначную правку, CRLF, несуществующий файл.
 
-**P2-02 · Поиск · TODO** · Зависит от: P1-04
+**P2-02 · Поиск · DONE** · Зависит от: P1-04
 - Инструменты: `glob {pattern, path?}`, `grep {pattern, path?, glob?, outputMode, context?}`.
 - Реализация: `@vscode/ripgrep` (бинарник в зависимостях), уважение `.gitignore`.
 - DoD: тесты на фикстуре; поиск по репозиторию JustAI < 1 с.
 
-**P2-03 · ProcessManager и `run_command` · TODO** · Зависит от: P1-04
+**P2-03 · ProcessManager и `run_command` · DONE** · Зависит от: P1-04
 - Файлы: `infrastructure/process/ProcessManager.ts`, инструменты `run_command {command, cwd?, timeoutMs?, background?}`, `read_output {processId, since?}`, `kill_process {processId}`.
 - Требования: Windows (PowerShell) и POSIX (bash); таймаут по умолчанию 2 мин, максимум 10; стрим вывода в `tool.progress`; убийство дерева процессов (`taskkill /T /F` на Windows, process group на POSIX); фоновые процессы для dev-серверов; ограничение размера вывода; код возврата в результате.
 - DoD: тесты: успешная команда, падающая команда (exit code ≠ 0 → isError), таймаут, фоновый процесс + чтение вывода + kill.
 
-**P2-04 · PermissionGate · TODO** · Зависит от: P2-03, P1-06
+**P2-04 · PermissionGate · DONE** · Зависит от: P2-03, P1-06
 - Файлы: `permissions/{PermissionGate,rules,CommandClassifier}.ts`, фронт `PermissionDialog`.
 - Шаги: раздел 6.2–6.3; классификация команд (парсинг цепочек `;`, `&&`, `|` — проверяется каждая часть); ожидание ответа пользователя через WS с таймаутом.
 - DoD: тесты классификатора (≥30 кейсов, включая обходы `cmd /c`, `powershell -c`, `bash -c`); e2e: в режиме `ask` запись файла показывает диалог и ждёт решения.
 
-**P2-05 · Git и снапшоты · TODO** · Зависит от: P2-01
+**P2-05 · Git и снапшоты · DONE** · Зависит от: P2-01
 - Файлы: `infrastructure/git/GitService.ts`, `SnapshotService.ts`, инструменты `git_status`, `git_diff`, `git_log`, `git_commit` (commit — только с разрешения).
 - DoD: тест: сессия меняет 3 файла → revert восстанавливает их, не трогая чужие незакоммиченные изменения пользователя.
 
-**P2-06 · TodoWrite (план задачи) · TODO** · Зависит от: P1-06
+**P2-06 · TodoWrite (план задачи) · DONE** · Зависит от: P1-06
 - Инструмент `todo_write {todos: [{content, status}]}` → событие `todo.updated`; в промпте — инструкция вести план для задач из ≥3 шагов.
 - DoD: план отображается во фронте и обновляется по ходу.
 
-**P2-07 · Web-инструменты · TODO** · Зависит от: P2-04
+**P2-07 · Web-инструменты · DONE: web_fetch; web_search — BLOCKED (нужно выбрать поставщика поиска)** · Зависит от: P2-04
 - `web_fetch {url}` (HTML → markdown, лимит размера), `web_search` (через провайдера поиска или API модели) — kind `network`, всегда через PermissionGate.
 - DoD: тест `web_fetch` на локальном сервере-фикстуре.
 
@@ -611,3 +603,12 @@ P0-01..03 → P0-04,P0-05 → P1-01 → P1-02 → P1-03
   - Модель по умолчанию — `claude-opus-5-5` с `effort: high` (раздел 5.2 обновлён).
   - Записи файлов агентом пока идут напрямую через fs, а не через WorkspaceService (дерево файлов в UI не обновляется само) — это P2-01.
   - Фронт: при обрыве WebSocket события теряются; после переподключения состояние сессии перечитывается с сервера.
+- 2026-10-21 · P2-01…P2-07 · Claude (Opus 5.5) · Фаза 2 завершена (кроме web_search). 180 тестов, typecheck и build зелёные; в браузере на Mock проверены: карточка разрешения в режиме ask → Allow → `npm --version`; full-auto: создание файла без вопроса + обновление дерева; `git push` → красная карточка без «всегда», Deny с комментарием доходит до агента; «Changes in this session» → Revert all. Решения и заметки:
+  - Запись файлов агентом — через `AgentFileSystem` (а не WorkspaceService): та же публикация событий FILE_*, плюс проверка «прочитан в этой сессии и не изменён» по sha1 содержимого, сохранение BOM/CRLF.
+  - Снапшоты — в теневом репозитории `.justai/shadow.git` (отдельный индекс-файл), а не в refs репозитория пользователя: не трогает его индекс/ветки и работает для проектов без git. Снапшот берётся перед первым изменяющим инструментом (write/execute) сессии.
+  - git ищется в `JUSTAI_GIT`, PATH, Git for Windows и GitHub Desktop. Без git снапшоты/откат и git-инструменты недоступны (UI скрывает блок изменений).
+  - Классификатор команд: при сомнении — `unknown` (не safe). Опасные команды подтверждаются всегда, «разрешить всегда» для них не запоминается. Правила проекта — `.justai/permissions.json` (агенту недоступен).
+  - Окружение команд: stdin закрыт, `CI=1`, `NO_COLOR`; ключи провайдеров и секреты сервера вырезаются. PowerShell 5.1 возвращает настоящий код выхода последней программы.
+  - **web_search не сделан**: нужно решение — серверный инструмент Anthropic (`web_search_20260209`, только для provider=anthropic, вне PermissionGate) или внешний поисковый API с ключом (Brave/Tavily и т.п.).
+  - Mock-провайдер понимает «прочитай X», «запусти <команда>», «создай файл X» — для ручной проверки UI без ключа.
+  - Коммиты из PowerShell 5.1: сообщения передавать через файл (`git commit -F`), иначе двойные кавычки теряются.

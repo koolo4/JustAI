@@ -13,15 +13,24 @@
 |---|---|---|
 | GET | `/api/agent/providers` | `{ providers: [{ id, label, configured, model }], defaultProvider }` |
 | GET | `/api/agent/profiles` | `{ profiles: [{ id, label, description, tools }] }` |
-| POST | `/api/agent/sessions` | `201 { session }`; body `{ profile?, provider?, model? }` |
+| POST | `/api/agent/sessions` | `201 { session }`; body `{ profile?, provider?, model?, mode? }` |
 | GET | `/api/agent/sessions` | `{ sessions }` (новые сверху) |
-| GET | `/api/agent/sessions/:id` | `{ session, messages }` |
+| GET | `/api/agent/sessions/:id` | `{ session, messages, pendingPermissions, todos }` |
+| PATCH | `/api/agent/sessions/:id` | `{ session }`; body `{ mode: "ask" \| "auto-edit" \| "full-auto" }` |
 | POST | `/api/agent/sessions/:id/messages` | `202 { session }`; body `{ text, activeFile? }`; `409`, если агент уже работает |
 | POST | `/api/agent/sessions/:id/stop` | `{ session }` после остановки цикла |
+| POST | `/api/agent/sessions/:id/permissions/:requestId` | `204`; body `{ decision: "allow" \| "allow_always" \| "deny", note? }`; `404`, если запрос уже не ждёт ответа |
+| GET | `/api/agent/sessions/:id/changes` | `{ available, files: [{ path, status }], diff }` — изменения с первой правки агента |
+| POST | `/api/agent/sessions/:id/revert` | `{ files }` — откат к снапшоту; `409`, если агент работает или нет git |
 
 Ход работы агента приходит по WebSocket (`ws://localhost:4302/?token=<token>`) событиями
 `AgentEvent` из `packages/shared/src/events.ts`: `session.status`, `assistant.delta`,
-`assistant.thinking_delta`, `message.added`, `tool.started`, `tool.finished`, `budget.updated`.
+`assistant.thinking_delta`, `message.added`, `tool.started`, `tool.progress`, `tool.finished`,
+`budget.updated`, `file.changed`, `todo.updated`, `permission.request`, `permission.resolved`.
+
+Режимы разрешений: `ask` — подтверждать изменения файлов, команды и сеть; `auto-edit` — правки и безопасные
+команды без вопросов; `full-auto` — всё, кроме опасных команд и сети. Правила проекта —
+`.justai/permissions.json`: `{ "allow": ["npm run e2e"], "deny": ["npm publish"] }`.
 По тому же сокету идут события файлов (`FILE_CREATED`, `FILE_SAVED`, …).
 
 Пример (PowerShell, токен из `.justai/runtime.json`):
