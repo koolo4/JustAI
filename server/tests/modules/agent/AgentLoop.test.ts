@@ -224,6 +224,75 @@ describe("AgentLoop", () => {
         expect(saved.map(m => m.role)).toEqual(["assistant", "user", "assistant"]);
     });
 
+    it("tells the model when its text tool call could not be parsed instead of finishing", async () => {
+        const { loop, user, saved } = setup([
+            { text: "<tool_call>{broken", formatError: "could not parse your tool call" },
+            { toolCalls: [{ name: "echo", input: { text: "ok" } }] },
+            { text: "done" },
+        ]);
+
+        const result = await loop.run([user]);
+
+        expect(result.status).toBe("completed");
+        expect(saved[1]!.content).toEqual([{ type: "text", text: "[JustAI] could not parse your tool call" }]);
+        expect(toolResults(saved[3])[0]).toMatchObject({ content: "echo:ok" });
+    });
+
+    it("gives up on format errors after three hints", async () => {
+        const { loop, user, provider } = setup(() => ({ text: "<tool_call>{", formatError: "unparsable" }));
+
+        const result = await loop.run([user]);
+
+        expect(result.status).toBe("completed");
+        expect(provider.requests).toHaveLength(4);
+    });
+
+    it("challenges a small model that claims changes without making any", async () => {
+        const writeTool = defineTool({
+            name: "write_file",
+            description: "write",
+            inputSchema: z.object({ path: z.string() }),
+            kind: "write",
+            run: async () => "written",
+        });
+
+        const provider = Object.assign(new MockProvider([
+            { text: "The function `mul` has been added to math.js." },
+            { toolCalls: [{ name: "write_file", input: { path: "math.js" } }] },
+            { text: "I added mul." },
+        ]), { smallModelGuards: true });
+
+        const saved: Message[] = [];
+        const loop = new AgentLoop({
+            sessionId: "s",
+            workspaceRoot: process.cwd(),
+            provider,
+            tools: [writeTool],
+            system: "",
+            limits: DEFAULT_BUDGET,
+            signal: new AbortController().signal,
+            emit: () => undefined,
+            onMessage: async message => {
+                saved.push(message);
+            },
+        });
+
+        const result = await loop.run([createMessage("user", [{ type: "text", text: "add mul" }])]);
+
+        expect(result.status).toBe("completed");
+        expect(JSON.stringify(saved[1]!.content)).toContain("no file was changed in this run");
+        // После реальной записи утверждение «I added» уже не оспаривается.
+        expect(saved.at(-1)!.content).toEqual([{ type: "text", text: "I added mul." }]);
+    });
+
+    it("does not challenge large models (guards off)", async () => {
+        const { loop, user, saved } = setup([{ text: "I added the function." }]);
+
+        await loop.run([user]);
+
+        expect(saved).toHaveLength(1);
+    });
+
     it("fails on refusal without running tools", async () => {
         const { loop, user, saved } = setup([
             { toolCalls: [{ name: "echo", input: { text: "x" } }], stopReason: "refusal" },

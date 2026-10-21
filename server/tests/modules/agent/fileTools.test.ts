@@ -111,6 +111,21 @@ describe("file tools", () => {
         expect(await disk("src/a.ts")).toBe("first\r\nsecond\r\n3\r\n");
     });
 
+    it("recovers old_string with literal \\n sequences (small-model escaping error)", async () => {
+        await run("read_file", { path: "src/a.ts" });
+
+        const result = await run("edit_file", {
+            path: "src/a.ts",
+            edits: [{ old_string: "line1\\nline2", new_string: "first\\nsecond" }],
+        });
+
+        expect(result).toContain("treated as line breaks");
+        expect(await disk("src/a.ts")).toBe("first\r\nsecond\r\nline3\r\n");
+
+        await expect(run("edit_file", { path: "src/a.ts", edits: [{ old_string: "nope\\nnothing", new_string: "x" }] }))
+            .rejects.toThrow("must be a real newline");
+    });
+
     it("refuses ambiguous edits unless replace_all, keeps $ literal", async () => {
         await run("read_file", { path: "src/a.ts" });
 

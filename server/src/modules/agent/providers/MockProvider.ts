@@ -27,6 +27,8 @@ export interface MockTurnScript {
     error?: Error;
     /** Задержка перед ответом (для тестов отмены). */
     delayMs?: number;
+    /** Имитация неразобранного вызова инструмента. */
+    formatError?: string;
 }
 
 export type MockScript =
@@ -111,6 +113,7 @@ export class MockProvider implements ModelProvider {
                     outputTokens: 5,
                 },
                 model: this.model,
+                ...(step.formatError ? { formatError: step.formatError } : {}),
             },
         };
     }

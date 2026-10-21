@@ -37,6 +37,9 @@ const MAX_OUTPUT_RETRIES = 2;
 /** Сколько раз просить продолжить текст, обрезанный по max_tokens. */
 const MAX_CONTINUATIONS = 2;
 
+/** Сколько раз сообщать модели, что её вызов инструмента не разобран. */
+const MAX_FORMAT_RETRIES = 3;
+
 export interface AgentLoopOptions {
     sessionId: string;
     workspaceRoot: string;
@@ -82,6 +85,9 @@ export class AgentLoop {
 
     private lastVerifyFailed = false;
 
+    /** В этом прогоне была хотя бы одна успешная правка файлов. */
+    private wroteThisRun = false;
+
     private verifyAttempts = 0;
 
     constructor(
@@ -95,6 +101,7 @@ export class AgentLoop {
         const messages = [...history];
         let outputRetries = 0;
         let continuations = 0;
+        let formatRetries = 0;
 
         const add = async (message: Message) => {
             messages.push(message);
@@ -158,6 +165,27 @@ export class AgentLoop {
             );
 
             if (toolUses.length === 0) {
+                if (turn.formatError && formatRetries < MAX_FORMAT_RETRIES) {
+                    formatRetries += 1;
+                    await add(createMessage("user", [{ type: "text", text: `[JustAI] ${turn.formatError}` }]));
+                    continue;
+                }
+
+                if (
+                    this.options.provider.smallModelGuards &&
+                    formatRetries < MAX_FORMAT_RETRIES &&
+                    !this.wroteThisRun &&
+                    this.options.tools.some(tool => tool.kind === "write" && tool.changesFiles !== false) &&
+                    claimsFileChanges(turn.content)
+                ) {
+                    formatRetries += 1;
+                    await add(createMessage("user", [{
+                        type: "text",
+                        text: "[JustAI] Your answer says files were changed, but no file was changed in this run (no edit_file or write_file call succeeded). Make the change now by calling the tool, or correct your answer if nothing needed to change.",
+                    }]));
+                    continue;
+                }
+
                 if (turn.stopReason === "pause_turn") {
                     continue;
                 }
@@ -405,6 +433,7 @@ export class AgentLoop {
 
         if (!isError && ((tool.kind === "write" && tool.changesFiles !== false) || tool.name === DELEGATE_TOOL)) {
             this.changedSinceVerify = true;
+            this.wroteThisRun = true;
         }
 
         this.options.emit({
@@ -445,6 +474,17 @@ export function createMessage(
         createdAt: new Date().toISOString(),
         ...(meta ? { meta } : {}),
     };
+}
+
+/**
+ * Ответ утверждает, что файлы изменены («has been added», «I've updated …»).
+ */
+export function claimsFileChanges(content: ContentBlock[]): boolean {
+    const text = content
+        .map(block => block.type === "text" ? block.text : "")
+        .join("\n");
+
+    return /\b(has|have) been (added|updated|created|modified|implemented|fixed|changed|written)\b|\bI(?:'ve| have)? (added|updated|created|modified|implemented|fixed|changed|wrote|rewrote)\b|<tool_response>/i.test(text);
 }
 
 function errorResult(toolUseId: string, text: string): ToolResultBlock {

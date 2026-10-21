@@ -6,11 +6,14 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Message } from "@justai/shared";
 
 import {
+    describesActionWithoutDoingIt,
     extractTextToolCalls,
+    isRepeating,
     OpenAICompatibleProvider,
+    repairJson,
     toChatMessages,
 } from "../../../src/modules/agent/providers/OpenAICompatibleProvider.js";
-import type { ModelStreamEvent, ModelTurn } from "../../../src/modules/agent/providers/ModelProvider.js";
+import { ModelOutputError, type ModelStreamEvent, type ModelTurn } from "../../../src/modules/agent/providers/ModelProvider.js";
 import { ProviderRegistry } from "../../../src/modules/agent/providers/ProviderRegistry.js";
 
 /** Сценарий ответа поддельного сервера: список chunk-объектов SSE. */
@@ -130,6 +133,13 @@ describe("OpenAICompatibleProvider", () => {
         const { turn } = await run([chunk({ content: "cut" }, "length")]);
         expect(turn.stopReason).toBe("max_tokens");
     });
+
+    it("interrupts a repeating stream with a retryable error", async () => {
+        const looping = "again and again and again, the same sentence over and over. ";
+        const chunks = Array.from({ length: 200 }, () => chunk({ content: looping }));
+
+        await expect(run(chunks)).rejects.toBeInstanceOf(ModelOutputError);
+    });
 });
 
 describe("extractTextToolCalls", () => {
@@ -167,6 +177,44 @@ describe("extractTextToolCalls", () => {
         expect(result.text.trim()).toBe("I'll create the file and run it.");
     });
 
+    it("repairs the broken call from the live qwen2.5-coder run (<tool_request>, missing ])", () => {
+        const text = [
+            "The `mul` function is indeed missing from the `math.js` file. I'll implement it and export it.",
+            "",
+            "<tool_request>",
+            "{\"name\": \"edit_file\", \"arguments\": {\"path\":\"math.js\",\"edits\":[{\"old_string\":\"x\",\"new_string\":\"function mul(a, b) {\\n  return a * b;\\n}\\nmodule.exports = { add, mul };}\"}}",
+            "</tool_request>",
+        ].join("\n");
+
+        const result = extractTextToolCalls(text, new Set(["edit_file"]));
+
+        expect(result.malformed).toBe(false);
+        expect(result.calls).toEqual([expect.objectContaining({
+            name: "edit_file",
+            input: {
+                path: "math.js",
+                edits: [{ old_string: "x", new_string: "function mul(a, b) {\n  return a * b;\n}\nmodule.exports = { add, mul };}" }],
+            },
+        })]);
+        expect(result.text.trim()).toBe("The `mul` function is indeed missing from the `math.js` file. I'll implement it and export it.");
+    });
+
+    it("handles unclosed tags and unclosed objects at the end of the answer", () => {
+        expect(extractTextToolCalls("Reading.\n<tool_call>{\"name\":\"read_file\",\"arguments\":{\"path\":\"a\"", tools).calls)
+            .toEqual([expect.objectContaining({ name: "read_file", input: { path: "a" } })]);
+
+        expect(extractTextToolCalls("Ok {\"name\": \"read_file\", \"arguments\": {\"path\": \"b\"}", tools).calls)
+            .toEqual([expect.objectContaining({ name: "read_file", input: { path: "b" } })]);
+    });
+
+    it("flags tool calls that cannot be recovered", () => {
+        const result = extractTextToolCalls("<tool_call>{\"name\": \"read_file\", \"arguments\": {\"path\": oops}}</tool_call>", tools);
+
+        expect(result.calls).toEqual([]);
+        expect(result.malformed).toBe(true);
+        expect(extractTextToolCalls("All done, the tests pass.", tools).malformed).toBe(false);
+    });
+
     it("ignores unknown tools and ordinary JSON in answers", () => {
         const example = "Here is the config:\n```json\n{\"name\": \"my-app\", \"version\": \"1.0.0\"}\n```";
         const result = extractTextToolCalls(example, tools);
@@ -174,6 +222,42 @@ describe("extractTextToolCalls", () => {
         expect(result.calls).toEqual([]);
         expect(result.text).toBe(example);
         expect(extractTextToolCalls("<tool_call>{\"name\":\"rm_everything\"}</tool_call>", tools).calls).toEqual([]);
+    });
+});
+
+describe("isRepeating", () => {
+    it("detects a model stuck in a loop, but not long normal text or code", () => {
+        const loop = `Let me fix the test. ${"I will now run the tests again to check the result. ".repeat(80)}`;
+        expect(isRepeating(loop)).toBe(true);
+
+        const prose = Array.from({ length: 120 }, (_, i) => `Line ${i}: the value of item ${i * 7} is ${i * i}.`).join("\n");
+        expect(isRepeating(prose)).toBe(false);
+        expect(isRepeating("short ".repeat(100))).toBe(false);
+    });
+});
+
+describe("describesActionWithoutDoingIt", () => {
+    it("detects intentions and requests to the user from the live run", () => {
+        expect(describesActionWithoutDoingIt("To fulfill the test requirement for `mul`, I will add this function to the existing module.\n\n### Tool Call: Edit File\n\nPlease apply the following edit to `math.js`:")).toBe(true);
+        expect(describesActionWithoutDoingIt("Let me update the config.")).toBe(true);
+        expect(describesActionWithoutDoingIt("You can run the command yourself: node x.js")).toBe(true);
+        expect(describesActionWithoutDoingIt("Let's update `math.js` with the `mul` function and export it properly.")).toBe(true);
+        expect(describesActionWithoutDoingIt("Let's proceed with reading the file and then attempting the edits again.")).toBe(true);
+    });
+
+    it("does not flag final summaries", () => {
+        expect(describesActionWithoutDoingIt("I added mul(a, b) to math.js and exported it. Tests pass.")).toBe(false);
+        expect(describesActionWithoutDoingIt("The function is defined in src/auth.ts:12.")).toBe(false);
+    });
+});
+
+describe("repairJson", () => {
+    it("closes brackets in the right order, respecting strings", () => {
+        expect(repairJson("{\"a\":[{\"b\":\"}]\"}}")).toBe("{\"a\":[{\"b\":\"}]\"}]}");
+        expect(repairJson("{\"a\":\"unterminated")).toBe("{\"a\":\"unterminated\"}");
+        expect(repairJson("{\"a\":1,")).toBe("{\"a\":1}");
+        expect(repairJson("{\"a\":1}} trailing")).toBe("{\"a\":1}");
+        expect(repairJson("not json")).toBeNull();
     });
 });
 

@@ -29,6 +29,11 @@ export interface ModelTurn {
     model: string;
     /** Исходный контент ответа провайдера, см. MessageMeta.providerRaw. */
     providerRaw?: unknown;
+    /**
+     * Модель пыталась вызвать инструмент, но вызов не разобран. Цикл сообщит ей об ошибке,
+     * а не завершит работу так, будто она закончила.
+     */
+    formatError?: string;
 }
 
 export type ModelStreamEvent =
@@ -45,6 +50,12 @@ export interface ModelProvider {
      * Не задано — история отправляется целиком (у Anthropic правка прошлых сообщений ломает thinking-блоки).
      */
     readonly contextWindow?: { tokens: number; reserveForOutput: number };
+
+    /**
+     * Включить страховки для небольших моделей: например, проверку ответа «я изменил файл»,
+     * когда ни одной правки не было.
+     */
+    readonly smallModelGuards?: boolean;
 
     /**
      * Стримит один ответ модели. Последнее событие — всегда "done".

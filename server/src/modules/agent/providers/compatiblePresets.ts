@@ -118,7 +118,8 @@ export function resolvePreset(preset: CompatiblePreset, env: NodeJS.ProcessEnv, 
         baseURL: env[`${preset.prefix}_BASE_URL`] || preset.baseURL,
         apiKey,
         model: resolvedModel,
-        maxOutputTokens: Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : 8192,
+        // Локальные модели медленные: длинный ответ — чаще всего зацикливание.
+        maxOutputTokens: Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : (preset.local ? 4096 : 8192),
         contextTokens: Number.isFinite(context) && context > 0 ? context : preset.contextTokens,
         configured: Boolean(resolvedModel) && (preset.local || Boolean(apiKey)),
     };

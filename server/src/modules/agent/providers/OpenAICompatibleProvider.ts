@@ -55,6 +55,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
 
     public readonly contextWindow?: { tokens: number; reserveForOutput: number };
 
+    /** Модели через OpenAI-совместимые серверы чаще всего небольшие: включаем страховки цикла. */
+    public readonly smallModelGuards = true;
+
     private readonly client: OpenAI;
 
     private readonly maxOutputTokens: number;
@@ -88,9 +91,14 @@ export class OpenAICompatibleProvider implements ModelProvider {
         const toolNames = new Set(request.tools.map(tool => tool.name));
         const calls = new Map<number, { id: string; name: string; arguments: string }>();
         let text = "";
+        let checkedAt = 0;
         let finish: string | null = null;
         let usage: ChatCompletionChunk["usage"] = null;
         let model = this.model;
+
+        // Своя отмена: сторож повторов прерывает «зациклившуюся» генерацию.
+        const local = new AbortController();
+        const signal = AbortSignal.any([request.signal, local.signal]);
 
         try {
             const stream = await this.client.chat.completions.create(
@@ -102,7 +110,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
                     stream: true,
                     ...(this.streamUsage ? { stream_options: { include_usage: true } } : {}),
                 },
-                { signal: request.signal },
+                { signal },
             );
 
             for await (const chunk of stream) {
@@ -129,6 +137,12 @@ export class OpenAICompatibleProvider implements ModelProvider {
                 if (delta.content) {
                     text += delta.content;
                     yield { type: "text_delta", text: delta.content };
+
+                    // Проверка не на каждом чанке: раз в ~250 новых символов.
+                    if (text.length - checkedAt >= 250 && (checkedAt = text.length) && isRepeating(text)) {
+                        local.abort();
+                        throw new ModelOutputError("The model got stuck repeating the same text; the request was interrupted.");
+                    }
                 }
 
                 for (const call of delta.tool_calls ?? []) {
@@ -151,7 +165,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
                 throw new ModelOutputError(`The model produced a malformed tool call: ${error.message}`, { cause: error });
             }
 
-            if (error instanceof OpenAI.APIError || request.signal.aborted) {
+            if (error instanceof ModelOutputError || error instanceof OpenAI.APIError || request.signal.aborted) {
                 throw error;
             }
 
@@ -173,10 +187,22 @@ export class OpenAICompatibleProvider implements ModelProvider {
                 input: parseArguments(call.arguments),
             }));
 
+        let formatError: string | undefined;
+
         if (toolUses.length === 0 && text) {
             const extracted = extractTextToolCalls(text, toolNames);
             toolUses = extracted.calls;
             remainingText = extracted.text;
+
+            if (extracted.malformed) {
+                formatError = "Your last message contains a tool call written as text that could not be parsed, so nothing was executed. "
+                    + "Call the tool again through the tool-calling interface with valid JSON arguments.";
+            }
+            else if (toolUses.length === 0 && describesActionWithoutDoingIt(remainingText) && toolNames.size > 0) {
+                formatError = "You described an action instead of performing it, so nothing was changed. "
+                    + "Do it yourself now by calling the right tool (for example edit_file, write_file or run_command). "
+                    + "If the task is already complete, answer with a short summary of what was done.";
+            }
         }
 
         if (remainingText.trim()) {
@@ -192,6 +218,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
                 stopReason: mapFinishReason(finish, toolUses.length > 0),
                 usage: mapUsage(usage),
                 model,
+                ...(formatError ? { formatError } : {}),
             },
         };
     }
@@ -304,12 +331,16 @@ function parseArguments(raw: string): unknown {
 interface TextToolCalls {
     calls: Array<{ type: "tool_use"; id: string; name: string; input: unknown }>;
     text: string;
+    /** В тексте явно была попытка вызова инструмента, но разобрать её не удалось. */
+    malformed: boolean;
 }
+
+const TOOL_TAGS = "tool_call|tool_request|function_call|tool_use|tool";
 
 /**
  * Модели без нативного вызова инструментов (или с плохой поддержкой) пишут вызов текстом:
- * <tool_call>{"name": …, "arguments": …}</tool_call>, ```json {…}```, или весь ответ — JSON.
- * Распознаются только имена из списка инструментов.
+ * <tool_call>{"name": …, "arguments": …}</tool_call> (и похожие теги), ```json {…}```, JSON прямо в тексте.
+ * Битый JSON (незакрытые скобки) чинится. Распознаются только имена из списка инструментов.
  */
 export function extractTextToolCalls(text: string, toolNames: Set<string>): TextToolCalls {
     const calls: TextToolCalls["calls"] = [];
@@ -322,7 +353,18 @@ export function extractTextToolCalls(text: string, toolNames: Set<string>): Text
             parsed = JSON.parse(candidate);
         }
         catch {
-            return false;
+            const repaired = repairJson(candidate);
+
+            try {
+                parsed = repaired === null ? undefined : JSON.parse(repaired);
+            }
+            catch {
+                return false;
+            }
+
+            if (parsed === undefined) {
+                return false;
+            }
         }
 
         const items = Array.isArray(parsed) ? parsed : [parsed];
@@ -349,9 +391,17 @@ export function extractTextToolCalls(text: string, toolNames: Set<string>): Text
         return found.length > 0;
     };
 
-    for (const pattern of [/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g, /```(?:json)?\s*([\[{][\s\S]*?[\]}])\s*```/g]) {
-        remaining = remaining.replace(pattern, (match, body: string) => take(body) ? "" : match);
+    const patterns = [
+        new RegExp(`<(${TOOL_TAGS})>\\s*([\\s\\S]*?)\\s*<\\/\\1>`, "g"),
+        // Тег открыт, но не закрыт до конца ответа.
+        new RegExp(`<(${TOOL_TAGS})>\\s*([\\s\\S]*)$`, "g"),
+    ];
+
+    for (const pattern of patterns) {
+        remaining = remaining.replace(pattern, (match, _tag: string, body: string) => take(body) ? "" : match);
     }
+
+    remaining = remaining.replace(/```(?:json)?\s*([\[{][\s\S]*?[\]}])\s*```/g, (match, body: string) => take(body) ? "" : match);
 
     if (calls.length === 0) {
         // Один или несколько JSON-объектов прямо в тексте (часто — несколько подряд без массива).
@@ -371,7 +421,147 @@ export function extractTextToolCalls(text: string, toolNames: Set<string>): Text
         }
     }
 
-    return { calls, text: remaining };
+    if (calls.length === 0) {
+        // Незакрытый объект вызова до конца текста: {"name": "edit_file", "arguments": {…
+        const start = remaining.search(/\{\s*"name"\s*:/);
+
+        if (start >= 0 && take(remaining.slice(start))) {
+            remaining = remaining.slice(0, start);
+        }
+    }
+
+    const names = [...toolNames].map(name => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+    const attempted = calls.length === 0 && names.length > 0 && (
+        new RegExp(`<(${TOOL_TAGS})>`).test(remaining) ||
+        new RegExp(`"name"\\s*:\\s*"(${names})"`).test(remaining)
+    );
+
+    return { calls, text: remaining, malformed: attempted };
+}
+
+/**
+ * Признак зацикливания: последние 200 символов встречаются в последних 4000 не меньше 4 раз.
+ * Проверяется только на длинном тексте, чтобы не мешать коротким повторяющимся структурам.
+ */
+export function isRepeating(text: string): boolean {
+    if (text.length < 2_000) {
+        return false;
+    }
+
+    const window = text.slice(-4_000);
+    const tail = window.slice(-200);
+
+    if (tail.trim().length < 20) {
+        return false;
+    }
+
+    let count = 0;
+    let index = window.indexOf(tail);
+
+    while (index !== -1) {
+        count += 1;
+
+        if (count >= 4) {
+            return true;
+        }
+
+        index = window.indexOf(tail, index + 1);
+    }
+
+    return false;
+}
+
+/**
+ * Маленькие модели часто описывают правку («I will add…», «Please apply the following edit…»)
+ * вместо вызова инструмента. Признак: намерение или просьба к пользователю, и нет признаков завершённой работы.
+ */
+export function describesActionWithoutDoingIt(text: string): boolean {
+    const intent = /\b(I will|I'll|let me|let's|let us|I am going to|I'm going to|next,? I|we will|we'll|we need to)\s+(now\s+)?(add|edit|update|create|modify|implement|write|run|fix|change|insert|apply|proceed|read|check|try|look)\b/i;
+    const askUser = /\b(please|you (can|should|need to|could))\s+(apply|add|run|edit|insert|replace|update|create)\b|apply the following|###\s*tool call/i;
+
+    return intent.test(text) || askUser.test(text);
+}
+
+/**
+ * Дописывает незакрытые кавычки и скобки и исправляет перепутанные закрывающие скобки
+ * (частая ошибка маленьких моделей). null — если текст не похож на JSON.
+ */
+export function repairJson(text: string): string | null {
+    const source = text.trim();
+
+    if (!source.startsWith("{") && !source.startsWith("[")) {
+        return null;
+    }
+
+    const stack: string[] = [];
+    let output = "";
+    let inString = false;
+    let escaped = false;
+
+    for (const char of source) {
+        if (inString) {
+            output += char;
+
+            if (escaped) {
+                escaped = false;
+            }
+            else if (char === "\\") {
+                escaped = true;
+            }
+            else if (char === "\"") {
+                inString = false;
+            }
+
+            continue;
+        }
+
+        if (char === "\"") {
+            inString = true;
+            output += char;
+            continue;
+        }
+
+        if (char === "{" || char === "[") {
+            stack.push(char === "{" ? "}" : "]");
+            output += char;
+            continue;
+        }
+
+        if (char === "}" || char === "]") {
+            // Закрывающая скобка не того типа: сначала закрываем то, что открыто внутри.
+            while (stack.length > 0 && stack.at(-1) !== char) {
+                output += stack.pop();
+            }
+
+            if (stack.length === 0) {
+                // Лишняя закрывающая скобка — конец JSON.
+                break;
+            }
+
+            stack.pop();
+            output += char;
+
+            if (stack.length === 0) {
+                break;
+            }
+
+            continue;
+        }
+
+        output += char;
+    }
+
+    if (inString) {
+        output += "\"";
+    }
+
+    output = output.replace(/,\s*$/, "");
+
+    while (stack.length > 0) {
+        output += stack.pop();
+    }
+
+    return output;
 }
 
 /**

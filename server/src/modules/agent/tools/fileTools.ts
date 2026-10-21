@@ -102,19 +102,37 @@ export function createFileTools(
             let text = state.text;
             let replacements = 0;
 
+            const notes: string[] = [];
+
             edits.forEach((edit, index) => {
-                const oldText = edit.old_string.replace(/\r\n/g, "\n");
-                const newText = edit.new_string.replace(/\r\n/g, "\n");
+                let oldText = edit.old_string.replace(/\r\n/g, "\n");
+                let newText = edit.new_string.replace(/\r\n/g, "\n");
                 const label = edits.length > 1 ? `Edit #${index + 1}: ` : "";
 
                 if (oldText === newText) {
                     throw new ToolError(`${label}old_string and new_string are identical.`);
                 }
 
-                const occurrences = text.split(oldText).length - 1;
+                let occurrences = text.split(oldText).length - 1;
+
+                // Частая ошибка небольших моделей: перевод строки передан как два символа «\n».
+                if (occurrences === 0 && /\\[nt]/.test(oldText)) {
+                    const unescapedOld = unescapeWhitespace(oldText);
+                    const found = text.split(unescapedOld).length - 1;
+
+                    if (found > 0) {
+                        oldText = unescapedOld;
+                        newText = unescapeWhitespace(newText);
+                        occurrences = found;
+                        notes.push(`${label}old_string contained literal "\\n" sequences; they were treated as line breaks. Use real newlines next time.`);
+                    }
+                }
 
                 if (occurrences === 0) {
-                    throw new ToolError(`${label}old_string was not found in ${file}. Read the file again and copy the text exactly. Nothing was written.`);
+                    const hint = /\\[nt]/.test(edit.old_string)
+                        ? " Note: old_string contains the two characters \\n; a line break must be a real newline (\"\\n\" in JSON)."
+                        : "";
+                    throw new ToolError(`${label}old_string was not found in ${file}. Read the file again and copy the text exactly.${hint} Nothing was written.`);
                 }
 
                 if (occurrences > 1 && !edit.replace_all) {
@@ -130,7 +148,7 @@ export function createFileTools(
 
             const result = await files.write(context.sessionId, file, text);
 
-            return `Updated ${file}: ${replacements} replacement(s).\n\n${result.diff}`;
+            return [`Updated ${file}: ${replacements} replacement(s).`, ...notes, "", result.diff].join("\n");
         },
     });
 
@@ -152,4 +170,8 @@ export function createFileTools(
     });
 
     return [readFile, listDir, editFile, writeFile];
+}
+
+function unescapeWhitespace(text: string): string {
+    return text.replace(/\\n/g, "\n").replace(/\\t/g, "\t");
 }
