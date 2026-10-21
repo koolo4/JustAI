@@ -22,10 +22,12 @@ npm run dev:server                   # сервер на http://127.0.0.1:4302
 npm run dev:web                      # фронт на http://localhost:3000
 ```
 Без API-ключа работает провайдер `mock`. Ключи и модели — в `server/.env` (образец `server/.env.example`).
-Локальные модели: Ollama запускать с большим контекстом, иначе промпт обрезается молча:
+Локальные модели: Ollama запускать с большим контекстом, иначе промпт обрезается молча. Модель должна целиком помещаться в видеопамять (`ollama ps` → `100% GPU`), иначе она в разы медленнее. Для 8 ГБ VRAM и моделей ~8B:
 ```powershell
-$env:OLLAMA_CONTEXT_LENGTH=32768; ollama serve
+$env:OLLAMA_CONTEXT_LENGTH=16384; $env:OLLAMA_FLASH_ATTENTION=1; $env:OLLAMA_KV_CACHE_TYPE="q8_0"; ollama serve
 ```
+`OLLAMA_CONTEXT` в `server/.env` должен совпадать с `OLLAMA_CONTEXT_LENGTH`. Для qwen3 без «размышлений» (в разы быстрее): `OLLAMA_REASONING_EFFORT=none`.
+При перезапуске Ollama завершать и `llama-server.exe`: он может остаться сиротой и держать память и CPU.
 Папку проекта для агента задаёт `JUSTAI_WORKSPACE` (по умолчанию — корень этого репозитория).
 
 Задача считается выполненной, только когда `typecheck` и `test` проходят (раздел 9 плана).
