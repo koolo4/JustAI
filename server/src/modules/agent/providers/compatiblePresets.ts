@@ -28,7 +28,7 @@ export const COMPATIBLE_PRESETS: CompatiblePreset[] = [
         prefix: "OLLAMA",
         baseURL: "http://127.0.0.1:11434/v1",
         keyEnv: [],
-        defaultModel: "qwen2.5-coder:7b",
+        defaultModel: "qwen3:8b",
         local: true,
         contextTokens: 32_768,
     },

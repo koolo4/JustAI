@@ -306,7 +306,7 @@ describe("ProviderRegistry presets", () => {
         const registry = new ProviderRegistry({ GROQ_API_KEY: "k", OPENROUTER_API_KEY: "k" });
         const byId = Object.fromEntries(registry.list().map(info => [info.id, info]));
 
-        expect(byId.ollama).toMatchObject({ configured: true, model: "qwen2.5-coder:7b" });
+        expect(byId.ollama).toMatchObject({ configured: true, model: "qwen3:8b" });
         expect(byId.groq).toMatchObject({ configured: true });
         expect(byId.gemini).toMatchObject({ configured: false });
         // OpenRouter без модели — не настроен.
