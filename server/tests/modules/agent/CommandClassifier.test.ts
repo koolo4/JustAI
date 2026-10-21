@@ -29,7 +29,13 @@ const cases: Array<[string, CommandLevel]> = [
     ["npm run build 2> $null", "safe"],
     ["NPM TEST", "safe"],
 
+    ["npm install", "safe"],
+    ["npm ci --no-audit", "safe"],
+
     // неизвестные
+    ["npm install typescript -D", "unknown"],
+    ["npm i lodash", "unknown"],
+    ["pnpm install left-pad", "unknown"],
     ["node scripts/migrate.js", "unknown"],
     ["python app.py", "unknown"],
     ["npm run deploy", "unknown"],

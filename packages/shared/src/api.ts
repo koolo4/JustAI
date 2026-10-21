@@ -9,6 +9,9 @@ export interface CreateSessionRequest {
     provider?: string;
     model?: string;
     mode?: PermissionMode;
+    /** Для профиля «планировщик»: провайдер и модель исполнителя. */
+    executorProvider?: string;
+    executorModel?: string;
 }
 
 export interface UpdateSessionRequest {

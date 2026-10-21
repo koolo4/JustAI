@@ -15,8 +15,11 @@ import { classifyCommand, splitSegments, tokenize, type CommandRules } from "./C
 /** Сколько ждать ответа пользователя. */
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
 
-/** Инструменты kind=execute без побочных эффектов вне процессов агента. */
-const HARMLESS_EXECUTE = new Set(["kill_process"]);
+/**
+ * Инструменты kind=execute без собственных побочных эффектов:
+ * kill_process трогает только процессы агента, delegate_task — действия исполнителя проверяются по отдельности.
+ */
+const HARMLESS_EXECUTE = new Set(["kill_process", "delegate_task"]);
 
 export interface AuthorizeRequest {
     sessionId: string;

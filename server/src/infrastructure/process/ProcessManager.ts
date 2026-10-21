@@ -234,7 +234,8 @@ export class ProcessManager {
                 info.status = "exited";
             }
 
-            info.exitCode = code;
+            // Windows отдаёт отрицательные коды (например, -4058) как беззнаковые 32-битные.
+            info.exitCode = code !== null && code > 0x7fffffff ? code - 0x100000000 : code;
             resolveExit();
         });
 

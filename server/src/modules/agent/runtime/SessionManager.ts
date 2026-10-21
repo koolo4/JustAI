@@ -5,6 +5,7 @@ import {
     emptyUsage,
     type AgentEvent,
     type CreateSessionRequest,
+    type ExecutorConfig,
     type Message,
     type SendMessageRequest,
     type SessionDetails,
@@ -27,7 +28,10 @@ import type { AgentProfiles } from "../profiles.js";
 import { projectTree, readProjectRules } from "../prompts/ProjectContext.js";
 import { buildSystemPrompt } from "../prompts/SystemPrompt.js";
 import type { ProviderRegistry } from "../providers/ProviderRegistry.js";
+import { DELEGATE_TOOL, type DelegateInput } from "../tools/delegateTool.js";
 import { latestTodos } from "../tools/todoTool.js";
+import { ToolError, type ToolContext } from "../tools/Tool.js";
+import { formatExecutorResult, type ExecutorRunner } from "./ExecutorRunner.js";
 import type { ToolRegistry } from "../tools/ToolRegistry.js";
 import { AgentLoop, createMessage } from "./AgentLoop.js";
 import type { BudgetLimits } from "./Budget.js";
@@ -46,6 +50,11 @@ export interface SessionManagerDeps {
     snapshots?: SnapshotService;
     /** Уведомить UI о файлах, восстановленных откатом. */
     onReverted?: (changes: SnapshotChange[]) => Promise<void>;
+    /** Исполнитель для профилей с delegate_task. */
+    executor?: {
+        defaultProvider: string;
+        runner: ExecutorRunner;
+    };
     emit: (event: AgentEvent) => void;
 }
 
@@ -71,6 +80,21 @@ export class SessionManager {
         const provider = this.deps.providers.create(providerId, request.model);
         const tools = this.deps.tools.select(profile.tools);
 
+        let executor: ExecutorConfig | undefined;
+
+        if (profile.tools.includes(DELEGATE_TOOL)) {
+            if (!this.deps.executor) {
+                throw new BadRequestError("The planner profile needs an executor, but delegation is not configured.");
+            }
+
+            const instance = this.deps.providers.create(
+                request.executorProvider ?? this.deps.executor.defaultProvider,
+                request.executorModel,
+            );
+
+            executor = { provider: instance.id, model: instance.model };
+        }
+
         const [rules, tree] = await Promise.all([
             readProjectRules(this.deps.workspaceRoot),
             projectTree(this.deps.workspaceRoot, this.deps.shouldIgnore),
@@ -85,6 +109,7 @@ export class SessionManager {
             provider: provider.id,
             model: provider.model,
             mode: request.mode ?? "ask",
+            ...(executor ? { executor } : {}),
             status: "idle",
             createdAt: now,
             updatedAt: now,
@@ -248,6 +273,52 @@ export class SessionManager {
         }
 
         return session.summary;
+    }
+
+    /**
+     * delegate_task: выполнить задачу планировщика исполнителем в рамках той же сессии.
+     */
+    public async delegate(input: DelegateInput, context: ToolContext): Promise<string> {
+        const session = await this.load(context.sessionId);
+        const { summary } = session;
+
+        if (!this.deps.executor) {
+            throw new ToolError("Delegation is not configured on this server.");
+        }
+
+        const executor = summary.executor ?? (() => {
+            const instance = this.deps.providers.create(this.deps.executor!.defaultProvider);
+            return { provider: instance.id, model: instance.model };
+        })();
+
+        const result = await this.deps.executor.runner.run({
+            sessionId: summary.id,
+            executor,
+            mode: () => summary.mode,
+            task: input.task,
+            signal: context.signal,
+            progress: line => context.emit({
+                type: "tool.progress",
+                sessionId: summary.id,
+                toolUseId: context.toolUseId,
+                chunk: `${line}\n`,
+            }),
+            emit: this.deps.emit,
+        });
+
+        summary.usage = addUsage(summary.usage, result.usage);
+
+        if (context.signal.aborted) {
+            throw new ToolError("Cancelled by user.");
+        }
+
+        const text = formatExecutorResult(executor, result);
+
+        if (result.status === "failed") {
+            throw new ToolError(text);
+        }
+
+        return text;
     }
 
     /** Дождаться завершения цикла (для тестов). */

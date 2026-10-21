@@ -5,6 +5,8 @@ import { ANTHROPIC_DEFAULT_MODEL, AnthropicProvider } from "./AnthropicProvider.
 import { MockProvider } from "./MockProvider.js";
 import type { ModelProvider } from "./ModelProvider.js";
 import { OPENAI_DEFAULT_MODEL, OpenAIProvider } from "./OpenAIProvider.js";
+import { OpenAICompatibleProvider } from "./OpenAICompatibleProvider.js";
+import { COMPATIBLE_PRESETS, findPreset, resolvePreset } from "./compatiblePresets.js";
 
 const ANTHROPIC_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 const OPENAI_EFFORTS = ["minimal", "low", "medium", "high"] as const;
@@ -36,6 +38,16 @@ export class ProviderRegistry {
                 configured: Boolean(this.env.OPENAI_API_KEY),
                 model: this.env.OPENAI_MODEL || OPENAI_DEFAULT_MODEL,
             },
+            ...COMPATIBLE_PRESETS.map(preset => {
+                const resolved = resolvePreset(preset, this.env);
+
+                return {
+                    id: preset.id,
+                    label: preset.label,
+                    configured: resolved.configured,
+                    model: resolved.model ?? `set ${preset.prefix}_MODEL`,
+                };
+            }),
             {
                 id: "mock",
                 label: "Mock (без ключа)",
@@ -67,8 +79,29 @@ export class ProviderRegistry {
             case "mock":
                 return new MockProvider();
 
-            default:
-                throw new BadRequestError(`Unknown AI provider: ${id}`);
+            default: {
+                const preset = findPreset(id);
+
+                if (!preset) {
+                    throw new BadRequestError(`Unknown AI provider: ${id}`);
+                }
+
+                const resolved = resolvePreset(preset, this.env, model);
+
+                if (!resolved.model) {
+                    throw new BadRequestError(`Set ${preset.prefix}_MODEL in server/.env or pass a model for ${preset.label}.`);
+                }
+
+                return new OpenAICompatibleProvider({
+                    id: preset.id,
+                    baseURL: resolved.baseURL,
+                    apiKey: resolved.apiKey,
+                    model: resolved.model,
+                    maxOutputTokens: resolved.maxOutputTokens,
+                    ...(preset.streamUsage === undefined ? {} : { streamUsage: preset.streamUsage }),
+                    ...(preset.headers ? { headers: preset.headers } : {}),
+                });
+            }
         }
     }
 }

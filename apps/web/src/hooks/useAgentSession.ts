@@ -147,6 +147,8 @@ export function useAgentSession() {
                     ...(options.provider ? { provider: options.provider } : {}),
                     ...(options.model ? { model: options.model } : {}),
                     ...(options.mode ? { mode: options.mode } : {}),
+                    ...(options.executorProvider ? { executorProvider: options.executorProvider } : {}),
+                    ...(options.executorModel ? { executorModel: options.executorModel } : {}),
                 });
 
                 id = session.id;

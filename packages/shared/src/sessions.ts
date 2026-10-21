@@ -15,6 +15,8 @@ export interface SessionSummary {
     provider: string;
     model: string;
     mode: PermissionMode;
+    /** Исполнитель для профиля «планировщик» (delegate_task). */
+    executor?: ExecutorConfig;
     status: SessionStatus;
     createdAt: string;
     updatedAt: string;
@@ -28,4 +30,9 @@ export interface SessionSummary {
 export interface Todo {
     content: string;
     status: "pending" | "in_progress" | "completed";
+}
+
+export interface ExecutorConfig {
+    provider: string;
+    model: string;
 }

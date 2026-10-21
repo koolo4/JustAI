@@ -84,6 +84,9 @@ const SAFE_PREFIXES: string[][] = [
     ["mvn", "test"], ["mvn", "-q", "test"], ["gradle", "test"], ["./gradlew", "test"], [".\\gradlew", "test"],
 ];
 
+/** Команды установки: безопасны только без имён пакетов (ставят зависимости из манифеста). */
+const INSTALL_COMMANDS = new Set(["npm install", "npm i", "npm ci", "pnpm install", "yarn install", "dotnet restore"]);
+
 /** Вложенные оболочки: их аргумент разбирается рекурсивно. */
 const NESTED_SHELLS: Array<{ shell: RegExp; flag: RegExp }> = [
     { shell: /^(cmd|cmd\.exe)$/i, flag: /^\/[ck]$/i },
@@ -196,6 +199,11 @@ function classifySegment(
 
     for (const prefix of SAFE_PREFIXES) {
         if (startsWith(lower, prefix)) {
+            // Установка зависимостей проекта — да; новых пакетов из интернета (их postinstall-скрипты) — нет.
+            if (INSTALL_COMMANDS.has(prefix.join(" ")) && lower.slice(prefix.length).some(token => !token.startsWith("-"))) {
+                return { level: "unknown", reason: "installs new packages from the internet" };
+            }
+
             return { level: "safe", reason: `known safe command (${prefix.join(" ")})` };
         }
     }

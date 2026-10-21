@@ -21,6 +21,8 @@ import { SnapshotService } from "../infrastructure/git/SnapshotService.js";
 import { createGitTools } from "../modules/agent/tools/gitTools.js";
 import { createTodoTool } from "../modules/agent/tools/todoTool.js";
 import { createWebTools } from "../modules/agent/tools/webTools.js";
+import { createDelegateTool } from "../modules/agent/tools/delegateTool.js";
+import { ExecutorRunner } from "../modules/agent/runtime/ExecutorRunner.js";
 import { AccessGuard } from "../core/security/AccessGuard.js";
 
 import {
@@ -238,6 +240,8 @@ export class Container {
             createTodoTool(),
             ...createWebTools(),
             ...createWordTools(this.microsoftGraph),
+            // SessionManager создаётся ниже — связываем лениво.
+            createDelegateTool(() => (input, context) => this.sessionManager.delegate(input, context)),
         ]) {
             this.toolRegistry.register(tool);
         }
@@ -247,6 +251,27 @@ export class Container {
 
         this.agentProfiles =
             new AgentProfiles();
+
+        const permissions =
+            new PermissionService({
+                rulesFile: path.join(this.workspaceRoot, ".justai", "permissions.json"),
+                emit: broadcast,
+            });
+
+        const executorRunner =
+            new ExecutorRunner({
+                providers: this.providerRegistry,
+                tools: this.toolRegistry,
+                profiles: this.agentProfiles,
+                permissions,
+                snapshots,
+                workspaceRoot: this.workspaceRoot,
+                shouldIgnore,
+                limits: {
+                    ...budgetFromEnv(),
+                    maxSteps: Number(process.env.JUSTAI_EXECUTOR_MAX_STEPS) || 40,
+                },
+            });
 
         this.sessionManager =
             new SessionManager({
@@ -259,10 +284,11 @@ export class Container {
                 workspaceRoot: this.workspaceRoot,
                 shouldIgnore,
                 limits: budgetFromEnv(),
-                permissions: new PermissionService({
-                    rulesFile: path.join(this.workspaceRoot, ".justai", "permissions.json"),
-                    emit: broadcast,
-                }),
+                permissions,
+                executor: {
+                    defaultProvider: process.env.JUSTAI_EXECUTOR_PROVIDER || "ollama",
+                    runner: executorRunner,
+                },
                 snapshots,
                 onReverted: async changes => {
                     for (const change of changes) {

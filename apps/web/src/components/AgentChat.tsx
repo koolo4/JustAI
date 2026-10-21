@@ -31,6 +31,7 @@ export function AgentChat() {
     const [provider, setProvider] = useState("");
     const [profile, setProfile] = useState("coder");
     const [mode, setMode] = useState<PermissionMode>("ask");
+    const [executorProvider, setExecutorProvider] = useState("ollama");
     const [prompt, setPrompt] = useState("");
     const [loadError, setLoadError] = useState("");
 
@@ -71,8 +72,12 @@ export function AgentChat() {
         }
     }, [agent.messages.length, agent.streamingText, agent.streamingThinking]);
 
+    const executorLabel = agent.session?.executor
+        ? ` → executor ${agent.session.executor.provider} · ${agent.session.executor.model}`
+        : "";
+
     const current = agent.session
-        ? `${agent.session.provider} · ${agent.session.model}`
+        ? `${agent.session.provider} · ${agent.session.model}${executorLabel}`
         : providers.find(item => item.id === provider)?.model ?? "";
 
     async function submit() {
@@ -87,6 +92,7 @@ export function AgentChat() {
             profile,
             provider,
             mode,
+            ...(profile === "planner" ? { executorProvider } : {}),
             ...(activeFile ? { activeFile } : {}),
         });
     }
@@ -148,6 +154,22 @@ export function AgentChat() {
                             ))}
                         </select>
                     </label>
+
+                    {profile === "planner" && !agent.session && (
+                        <label>
+                            <span className="muted">Executor (runs the steps)</span>
+                            <select
+                                value={executorProvider}
+                                onChange={event => setExecutorProvider(event.target.value)}
+                            >
+                                {providers.filter(item => item.id !== "mock").map(item => (
+                                    <option key={item.id} value={item.id} disabled={!item.configured}>
+                                        {item.label} · {item.model}{item.configured ? "" : " (not configured)"}
+                                    </option>
+                                ))}
+                            </select>
+                        </label>
+                    )}
 
                     <label>
                         <span className="muted">Permissions</span>
