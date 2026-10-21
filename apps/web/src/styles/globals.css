@@ -315,6 +315,12 @@ button {
     font-size: 12px;
 }
 
+.tool-image {
+    display: block;
+    max-width: 100%;
+    border-top: 1px solid #242a32;
+}
+
 .message.streaming {
     border: 1px dashed #303842;
 }

@@ -17,6 +17,8 @@ import {
     FileSavedEvent,
 } from "../core/events/index.js";
 import { GitService } from "../infrastructure/git/GitService.js";
+import { BrowserService } from "../infrastructure/browser/BrowserService.js";
+import { createBrowserTools } from "../modules/agent/tools/browserTools.js";
 import { SnapshotService } from "../infrastructure/git/SnapshotService.js";
 import { createGitTools } from "../modules/agent/tools/gitTools.js";
 import { createTodoTool } from "../modules/agent/tools/todoTool.js";
@@ -78,6 +80,7 @@ export class Container {
 
     public readonly processManager: ProcessManager;
     public readonly gitService: GitService;
+    public readonly browserService: BrowserService;
     public readonly toolRegistry: ToolRegistry;
     public readonly providerRegistry: ProviderRegistry;
     public readonly agentProfiles: AgentProfiles;
@@ -224,6 +227,13 @@ export class Container {
         this.gitService =
             new GitService();
 
+        this.browserService =
+            new BrowserService(
+                process.env.JUSTAI_BROWSER_CHANNEL
+                    ? { channel: process.env.JUSTAI_BROWSER_CHANNEL }
+                    : {},
+            );
+
         const snapshots =
             new SnapshotService(
                 this.gitService,
@@ -240,6 +250,7 @@ export class Container {
             ...createGitTools(this.gitService, this.workspaceRoot),
             createTodoTool(),
             ...createWebTools(),
+            ...createBrowserTools(this.browserService),
             ...createWordTools(this.microsoftGraph),
             // SessionManager создаётся ниже — связываем лениво.
             createDelegateTool(() => (input, context) => this.sessionManager.delegate(input, context)),

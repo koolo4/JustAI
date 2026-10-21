@@ -24,6 +24,8 @@ export interface Tool<Schema extends z.ZodType = z.ZodType> {
     readonly kind: ToolKind;
     /** Спрашивать пользователя в любом режиме (например, git commit). */
     readonly requiresApproval?: boolean;
+    /** kind=write, но файлы не меняются (клик в браузере): не запускать автопроверку. */
+    readonly changesFiles?: boolean;
     run(input: z.infer<Schema>, context: ToolContext): Promise<ToolOutput>;
 }
 

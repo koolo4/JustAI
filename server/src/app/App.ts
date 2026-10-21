@@ -41,9 +41,10 @@ export class App {
 
             process.once(signal, () => {
 
-                void this.container.processManager
-                    .killAll()
-                    .finally(() => process.exit(0));
+                void Promise.allSettled([
+                    this.container.processManager.killAll(),
+                    this.container.browserService.closeAll(),
+                ]).finally(() => process.exit(0));
 
             });
 

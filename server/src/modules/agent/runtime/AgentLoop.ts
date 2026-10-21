@@ -403,7 +403,7 @@ export class AgentLoop {
 
         content = truncateOutput(content);
 
-        if (!isError && (tool.kind === "write" || tool.name === DELEGATE_TOOL)) {
+        if (!isError && ((tool.kind === "write" && tool.changesFiles !== false) || tool.name === DELEGATE_TOOL)) {
             this.changedSinceVerify = true;
         }
 

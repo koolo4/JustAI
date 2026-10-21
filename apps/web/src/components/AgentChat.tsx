@@ -433,6 +433,14 @@ function ToolCard({
             <pre className="tool-detail">{JSON.stringify(use.input, null, 2)}</pre>
             {live && <pre className="tool-detail">{progress.output}</pre>}
             {result && <pre className="tool-detail">{outputText(result.content)}</pre>}
+            {result && typeof result.content !== "string" && result.content.map((block, index) => block.type === "image" && (
+                <img
+                    key={index}
+                    className="tool-image"
+                    src={`data:${block.mediaType};base64,${block.dataBase64}`}
+                    alt="Screenshot from the agent's browser"
+                />
+            ))}
         </details>
     );
 }
