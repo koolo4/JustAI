@@ -242,8 +242,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
     }
 }
 
-function isMalformedToolCall(error: InstanceType<typeof OpenAI.APIError>): boolean {
-    return error.status === 400 &&
+export function isMalformedToolCall(error: InstanceType<typeof OpenAI.APIError>): boolean {
+    // Ошибка посреди потока (Groq: «Tool call validation failed») приходит без HTTP-статуса.
+    return (error.status === 400 || error.status === undefined) &&
         /tool[ _]?call|function[ _]?call|parse|invalid .*argument/i.test(error.message);
 }
 

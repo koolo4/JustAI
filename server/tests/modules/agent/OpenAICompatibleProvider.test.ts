@@ -1,6 +1,7 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 
+import OpenAI from "openai";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import type { Message } from "@justai/shared";
@@ -8,6 +9,7 @@ import type { Message } from "@justai/shared";
 import {
     describesActionWithoutDoingIt,
     extractTextToolCalls,
+    isMalformedToolCall,
     isRepeating,
     OpenAICompatibleProvider,
     repairJson,
@@ -223,6 +225,23 @@ describe("extractTextToolCalls", () => {
         expect(result.calls).toEqual([]);
         expect(result.text).toBe(example);
         expect(extractTextToolCalls("<tool_call>{\"name\":\"rm_everything\"}</tool_call>", tools).calls).toEqual([]);
+    });
+});
+
+describe("isMalformedToolCall", () => {
+    const apiError = (status: number | undefined, message: string) =>
+        new OpenAI.APIError(status, { message }, message, undefined);
+
+    it("treats tool call validation errors as model output errors, also mid-stream", () => {
+        const groq = "Tool call validation failed: attempted to call tool 'run_command' which was not in request.tools";
+
+        expect(isMalformedToolCall(apiError(400, groq))).toBe(true);
+        expect(isMalformedToolCall(apiError(undefined, groq))).toBe(true);
+    });
+
+    it("leaves other API errors alone", () => {
+        expect(isMalformedToolCall(apiError(413, "Request too large for model"))).toBe(false);
+        expect(isMalformedToolCall(apiError(undefined, "Internal server error"))).toBe(false);
     });
 });
 

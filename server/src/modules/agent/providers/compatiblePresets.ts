@@ -59,7 +59,8 @@ export const COMPATIBLE_PRESETS: CompatiblePreset[] = [
         keyEnv: ["GROQ_API_KEY"],
         defaultModel: "openai/gpt-oss-120b",
         local: false,
-        contextTokens: 128_000,
+        // Бесплатный тариф: 8000 токенов в минуту на запрос, больше — ответ 413. Платный: GROQ_CONTEXT=128000.
+        contextTokens: 8_000,
     },
     {
         id: "gemini",
