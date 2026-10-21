@@ -1,228 +1,113 @@
-import { useEffect, useMemo, useState } from "react";
-
-import { fetchWorkspaceTree, fetchWorkspaceFile, saveWorkspaceFile } from "../services/workspaceApi";
-
-import { useWorkspaceSocket } from "../hooks/useWorkspaceSocket";
-
-import { useIDEContext } from "../context/useIDEContext";
-
-import type {
-
-    WorkspaceNode,
-
-    WorkspaceEvent,
-
-} from "../types/workspace";
-
-import { FileTree } from "../components/FileTree";
-
-import { FileViewer } from "../components/FileViewer";
+import { useEffect, useState } from "react";
 
 import { AgentChat } from "../components/AgentChat";
+import { FileTree } from "../components/FileTree";
+import { useIDEContext } from "../context/useIDEContext";
+import { CodeEditor } from "../editor/CodeEditor";
+import { useEditorTabs } from "../editor/useEditorTabs";
+import { useWorkspaceSocket } from "../hooks/useWorkspaceSocket";
+import { fetchWorkspaceTree } from "../services/workspaceApi";
+import type { WorkspaceEvent, WorkspaceNode } from "../types/workspace";
 
 export function App() {
 
     const {
-
         setProjectTree,
-
         setActiveFile,
-
         setActiveContent,
-
         addOpenedFile,
-
     } = useIDEContext();
 
-    const [
-
-        tree,
-
-        setTree,
-
-    ] = useState<WorkspaceNode[]>([]);
-
-    const [
-
-        selectedPath,
-
-        setSelectedPath,
-
-    ] = useState("");
-
-    const [
-
-        fileContent,
-
-        setFileContent,
-
-    ] = useState("");
+    const [tree, setTree] = useState<WorkspaceNode[]>([]);
+    const editor = useEditorTabs();
 
     function refreshTree() {
-
         fetchWorkspaceTree()
-
-            .then(tree => {
-
-                setTree(tree);
-
-                setProjectTree(tree);
-
+            .then(nodes => {
+                setTree(nodes);
+                setProjectTree(nodes);
             })
-
             .catch(console.error);
-
     }
 
     // Изменения файлов (в том числе агентом) приходят по WebSocket.
     function handleWorkspaceEvent(event: WorkspaceEvent) {
+        switch (event.type) {
+            case "FILE_SAVED":
+                if (event.path) {
+                    void editor.diskChanged(event.path);
+                }
+                break;
 
-        if (event.type !== 'FILE_SAVED') {
+            case "FILE_CREATED":
+                refreshTree();
+                if (event.path) {
+                    void editor.diskChanged(event.path);
+                }
+                break;
 
-            refreshTree();
+            case "FILE_DELETED":
+                refreshTree();
+                if (event.path) {
+                    editor.diskDeleted(event.path);
+                }
+                break;
 
+            default:
+                refreshTree();
         }
-
-        const changed = event.path ?? event.newPath;
-
-        if (selectedPath && changed === selectedPath) {
-
-            fetchWorkspaceFile(selectedPath)
-
-                .then((json: { content: string }) => {
-
-                    setFileContent(json.content);
-
-                    setActiveContent(json.content);
-
-                })
-
-                .catch(console.error);
-
-        }
-
     }
 
-    const socketStatus =
-
-        useWorkspaceSocket(
-
-            handleWorkspaceEvent,
-
-        );
+    const socketStatus = useWorkspaceSocket(handleWorkspaceEvent);
 
     useEffect(() => {
-
         refreshTree();
-
     }, []);
 
-    async function handleSelect(
+    // Агенту подсказываем, какой файл открыт.
+    const activeTab = editor.tabs.find(tab => tab.path === editor.active);
 
-        path: string,
+    useEffect(() => {
+        setActiveFile(editor.active);
+        setActiveContent(activeTab?.value ?? "");
+    }, [editor.active, activeTab?.value]);
 
-    ) {
-
-        setSelectedPath(path);
-
-        setActiveFile(path);
-
+    function handleSelect(path: string) {
         addOpenedFile(path);
-
-        const json =
-
-            await fetchWorkspaceFile(path) as { content: string };
-
-        setFileContent(
-
-            json.content,
-
-        );
-
-        setActiveContent(
-
-            json.content,
-
-        );
-
+        void editor.open(path);
     }
 
-    const header = useMemo(
-
-        () =>
-
-            socketStatus === "open"
-
-                ? "WebSocket: connected"
-
-                : "WebSocket: connecting...",
-
-        [
-
-            socketStatus,
-
-        ],
-
-    );
-
     return (
-
         <div className="app-shell">
-
             <header className="topbar">
-
-                <h1>
-
-                    JustAI
-
-                </h1>
-
-                <span>
-
-                    {header}
-
+                <h1>JustAI</h1>
+                <span className={`connection ${socketStatus}`}>
+                    {socketStatus === "open" ? "● connected" : "○ connecting…"}
                 </span>
-
             </header>
 
             <main className="layout">
-
                 <aside className="panel left">
-
-                    <FileTree
-
-                        nodes={tree}
-
-                        onSelect={handleSelect}
-
-                    />
-
+                    <FileTree nodes={tree} onSelect={handleSelect} activePath={editor.active} />
                 </aside>
 
                 <section className="panel center">
-
-                    <FileViewer
-                        path={selectedPath}
-                        content={fileContent}
-                        onSave={async (path, content) => {
-                            await saveWorkspaceFile(path, content);
-                            setFileContent(content);
-                            setActiveContent(content);
-                        }}
+                    <CodeEditor
+                        tabs={editor.tabs}
+                        active={editor.active}
+                        onActivate={editor.setActive}
+                        onClose={editor.close}
+                        onChange={editor.change}
+                        onSave={path => void editor.save(path)}
+                        onTakeDisk={editor.takeDisk}
+                        onKeepMine={editor.keepMine}
                     />
-
                 </section>
 
                 <aside className="panel right">
-
                     <AgentChat />
-
                 </aside>
-
             </main>
-
         </div>
-
     );
-
 }
