@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased — Phase 3: self-verification (22.10.2026)
+
+### Added
+
+- Project detection (Node, Python, Rust, Go, .NET, Java; monorepos): build / typecheck / lint / test / dev commands go into the system prompt.
+- Automatic checks after agent changes (`JUSTAI_VERIFY`, default `typecheck,test`): failures are sent back to the agent to fix; checks card and per-session switch in the UI.
+- Browser tools for the project's local UI: `browser_open`, `browser_screenshot`, `browser_text`, `browser_console`, `browser_click`, `browser_type`, `browser_close`.
+- Context fitting for small context windows (local and free models): old tool output is cleared, oldest turns dropped with a note of changed files and the plan.
+- `spawn_agent` read-only helpers (explore, review) running in parallel; "Docs Writer" profile.
+- Guards for small models: text tool calls in any tag, JSON repair, hints when a call is unparsable or only described, challenge of false "file changed" claims, repetition watchdog.
+
+### Fixed
+
+- The executor chosen in the UI was ignored when creating a planner session.
+
 ## Unreleased — Hybrid mode (21.10.2026)
 
 ### Added
