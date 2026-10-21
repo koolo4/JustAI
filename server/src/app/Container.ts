@@ -11,6 +11,7 @@ import { WorkspaceController } from "../modules/workspace/WorkspaceController.js
 import { ConfigService } from "../core/config/index.js";
 import { ConsoleLogger, ILogger } from "../core/logger/index.js";
 import { EventBus } from "../core/events/index.js";
+import { AccessGuard } from "../core/security/AccessGuard.js";
 
 import {
     WebSocketConnectionManager,
@@ -48,6 +49,7 @@ export class Container {
     private readonly workspaceRoot: string;
 
     public readonly eventBus: EventBus;
+    public readonly accessGuard: AccessGuard;
 
     public readonly fileSystem: LocalFileSystem;
     public readonly pathResolver: PathResolver;
@@ -111,6 +113,30 @@ export class Container {
 
         this.logger =
             new ConsoleLogger();
+
+        const config =
+            this.configService.get();
+
+        this.accessGuard =
+            new AccessGuard({
+                token:
+                    process.env.JUSTAI_TOKEN ||
+                    AccessGuard.generateToken(),
+                allowedOrigins:
+                    config.allowedOrigins,
+                allowedHosts:
+                    ["localhost", "127.0.0.1", "[::1]"].map(
+                        host => `${host}:${config.port}`,
+                    ),
+                publicPaths: [
+                    "/",
+                    "/api/health",
+                    "/api/auth/token",
+                    // OAuth: браузерная навигация без заголовков; callback защищён state
+                    "/api/integrations/microsoft/connect",
+                    "/api/integrations/microsoft/callback",
+                ],
+            });
 
         this.eventBus =
             new EventBus();
@@ -292,6 +318,10 @@ export class Container {
 
     public getLogger(): ILogger {
         return this.logger;
+    }
+
+    public getWorkspaceRoot(): string {
+        return this.workspaceRoot;
     }
 
     public async initialize(): Promise<void> {

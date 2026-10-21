@@ -1,3 +1,5 @@
+import { apiFetch } from "./http";
+
 export interface AIRequest {
 
     prompt: string;
@@ -38,15 +40,12 @@ export interface AIAgentInfo {
 
 }
 
-const API_URL =
-    import.meta.env.VITE_API_URL ??
-    "http://localhost:4302/api";
 
 export async function askAI(
     context: AIRequest,
 ): Promise<string> {
-    const response = await fetch(
-        `${API_URL}/ai/chat`,
+    const response = await apiFetch(
+        `/ai/chat`,
         {
             method: "POST",
             headers: {
@@ -74,8 +73,8 @@ export async function askAI(
 export async function fetchAIProviders():
 Promise<AIProviderInfo[]> {
     const response =
-        await fetch(
-            `${API_URL}/ai/providers`,
+        await apiFetch(
+            `/ai/providers`,
         );
 
     if (!response.ok) {
@@ -95,8 +94,8 @@ Promise<AIProviderInfo[]> {
 export async function fetchAIAgents():
 Promise<AIAgentInfo[]> {
     const response =
-        await fetch(
-            `${API_URL}/ai/agents`,
+        await apiFetch(
+            `/ai/agents`,
         );
 
     if (!response.ok) {

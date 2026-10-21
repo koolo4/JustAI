@@ -1,6 +1,4 @@
-const API_URL =
-    import.meta.env.VITE_API_URL ??
-    "http://localhost:4302/api";
+import { API_URL, apiFetch } from "./http";
 
 export interface MicrosoftStatus {
     configured: boolean;
@@ -10,8 +8,8 @@ export interface MicrosoftStatus {
 export async function fetchIntegrationStatus():
 Promise<MicrosoftStatus> {
     const response =
-        await fetch(
-            `${API_URL}/integrations/status`,
+        await apiFetch(
+            `/integrations/status`,
         );
 
     if (!response.ok) {
@@ -35,8 +33,8 @@ export function getMicrosoftConnectUrl(): string {
 export async function disconnectMicrosoft():
 Promise<void> {
     const response =
-        await fetch(
-            `${API_URL}/integrations/microsoft/disconnect`,
+        await apiFetch(
+            `/integrations/microsoft/disconnect`,
             {
                 method: "POST",
             },

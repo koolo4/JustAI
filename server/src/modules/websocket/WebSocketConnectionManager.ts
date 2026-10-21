@@ -1,5 +1,5 @@
 import { WebSocketServer, WebSocket } from 'ws';
-import type { Server as HttpServer } from 'node:http';
+import type { Server as HttpServer, IncomingMessage } from 'node:http';
 
 export class WebSocketConnectionManager {
 
@@ -10,10 +10,12 @@ export class WebSocketConnectionManager {
 
     public attach(
         httpServer: HttpServer,
+        verify: (request: IncomingMessage) => boolean,
     ): void {
 
         this.server = new WebSocketServer({
             server: httpServer,
+            verifyClient: (info: { req: IncomingMessage }) => verify(info.req),
         });
 
         this.server.on(

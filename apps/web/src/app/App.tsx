@@ -116,15 +116,9 @@ export function App() {
 
         addOpenedFile(path);
 
-        const response = await fetch(
-
-            `http://localhost:4302/api/workspace/file?path=${encodeURIComponent(path)}`,
-
-        );
-
         const json =
 
-            await response.json();
+            await fetchWorkspaceFile(path) as { content: string };
 
         setFileContent(
 

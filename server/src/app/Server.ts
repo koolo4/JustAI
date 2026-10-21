@@ -32,18 +32,52 @@ export class Server {
         this.configure();
         this.routes();
         this.errors();
-        
 
+    }
+
+    /**
+     * Express-приложение без запуска сервера (для тестов).
+     */
+    public getApp(): Express {
+        return this.app;
     }
 
     private configure(): void {
 
-        this.app.use(
-            cors(),
+        const guard =
+            this.container.accessGuard;
+
+        this.app.disable(
+            'x-powered-by',
         );
 
         this.app.use(
-            express.json(),
+            guard.perimeter(),
+        );
+
+        this.app.use(
+            cors({
+                origin: guard.allowedOrigins,
+                allowedHeaders: [
+                    'Authorization',
+                    'Content-Type',
+                ],
+            }),
+        );
+
+        this.app.use(
+            express.json({
+                limit: '5mb',
+            }),
+        );
+
+        this.app.get(
+            '/api/auth/token',
+            guard.tokenEndpoint(),
+        );
+
+        this.app.use(
+            guard.authenticate(),
         );
 
     }
@@ -86,8 +120,6 @@ export class Server {
                 res.json({
                     name: "JustAI",
                     status: "ok",
-                    web: "http://localhost:3000/",
-                    health: "http://localhost:4302/api/health",
                 });
             },
         );
@@ -121,6 +153,7 @@ export class Server {
 
     public start(
         port: number,
+        host: string,
     ): void {
 
         const logger =
@@ -133,14 +166,19 @@ export class Server {
 
         this.container.webSocketConnectionManager.attach(
             httpServer,
+            request =>
+                this.container.accessGuard.verifyUpgrade(
+                    request,
+                ),
         );
 
         httpServer.listen(
             port,
+            host,
             () => {
 
                 logger.info(
-                    `🚀 JustAI Server running on http://localhost:${port}`,
+                    `🚀 JustAI Server running on http://${host}:${port}`,
                 );
 
             },

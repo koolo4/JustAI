@@ -1,10 +1,10 @@
+import { apiFetch } from "./http";
+
 import type {
     WorkspaceNode,
 } from '../types/workspace';
 
 
-const API_URL =
-    `${import.meta.env.VITE_API_URL ?? 'http://localhost:4302/api'}/workspace`;
 
 
 
@@ -12,8 +12,8 @@ export async function fetchWorkspaceTree()
 : Promise<WorkspaceNode[]> {
 
     const response =
-        await fetch(
-            `${API_URL}/tree`,
+        await apiFetch(
+            `/workspace/tree`,
         );
 
 
@@ -37,8 +37,8 @@ export async function fetchWorkspaceFile(
 ) {
 
     const response =
-        await fetch(
-            `${API_URL}/file?path=${encodeURIComponent(path)}`,
+        await apiFetch(
+            `/workspace/file?path=${encodeURIComponent(path)}`,
         );
 
 
@@ -64,8 +64,8 @@ export async function saveWorkspaceFile(
 
 
     const response =
-        await fetch(
-            `${API_URL}/file`,
+        await apiFetch(
+            `/workspace/file`,
             {
 
                 method: 'PUT',

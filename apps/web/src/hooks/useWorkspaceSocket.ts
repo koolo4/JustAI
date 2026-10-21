@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
+
+import { getSocketUrl, resetToken } from '../services/http';
 import type { WorkspaceEvent } from '../types/workspace';
+
+const RECONNECT_DELAY_MS = 2000;
 
 export function useWorkspaceSocket(
     onEvent: (event: WorkspaceEvent) => void,
@@ -16,37 +20,67 @@ export function useWorkspaceSocket(
 
     useEffect(() => {
 
-        const socket =
-            new WebSocket('ws://localhost:4302');
+        let socket: WebSocket | null = null;
+        let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+        let disposed = false;
 
-        socket.onopen = () => {
-            setStatus('open');
+        const scheduleReconnect = () => {
+            if (disposed) {
+                return;
+            }
+
+            setStatus('closed');
+            // после перезапуска сервера токен другой
+            resetToken();
+            reconnectTimer = setTimeout(connect, RECONNECT_DELAY_MS);
         };
 
-        socket.onmessage = (message) => {
-            try {
-                const event =
-                    JSON.parse(
-                        message.data,
-                    ) as WorkspaceEvent;
+        async function connect() {
+            setStatus('connecting');
 
-                onEventRef.current(event);
+            let url: string;
+
+            try {
+                url = await getSocketUrl();
             }
             catch {
-                // ignore malformed messages
+                scheduleReconnect();
+                return;
             }
-        };
 
-        socket.onclose = () => {
-            setStatus('closed');
-        };
+            if (disposed) {
+                return;
+            }
 
-        socket.onerror = () => {
-            setStatus('closed');
-        };
+            socket = new WebSocket(url);
+
+            socket.onopen = () => {
+                setStatus('open');
+            };
+
+            socket.onmessage = (message) => {
+                try {
+                    const event =
+                        JSON.parse(
+                            message.data,
+                        ) as WorkspaceEvent;
+
+                    onEventRef.current(event);
+                }
+                catch {
+                    // ignore malformed messages
+                }
+            };
+
+            socket.onclose = scheduleReconnect;
+        }
+
+        void connect();
 
         return () => {
-            socket.close();
+            disposed = true;
+            clearTimeout(reconnectTimer);
+            socket?.close();
         };
 
     }, []);
