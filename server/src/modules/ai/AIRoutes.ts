@@ -8,9 +8,5 @@ export function createAIRouter(controller: AIController): Router {
     router.get("/agents", controller.agents);
     router.post("/chat", controller.chat);
 
-    router.get("/council/status", controller.councilStatus);
-    router.post("/council/connect/:provider", controller.councilConnect);
-    router.post("/council/run", controller.councilRun);
-
     return router;
 }

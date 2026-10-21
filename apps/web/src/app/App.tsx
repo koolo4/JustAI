@@ -19,7 +19,6 @@ import { FileTree } from "../components/FileTree";
 import { FileViewer } from "../components/FileViewer";
 
 import { AIChat } from "../components/AIChat";
-import { AICouncil } from "../components/AICouncil";
 
 export function App() {
 
@@ -210,7 +209,6 @@ export function App() {
                 <aside className="panel right">
 
                     <AIChat />
-                    <AICouncil />
 
                 </aside>
 

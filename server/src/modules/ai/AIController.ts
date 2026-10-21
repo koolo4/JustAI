@@ -3,11 +3,6 @@ import type { NextFunction, Request, Response } from "express";
 import { AIService } from "./AIService.js";
 import { ProviderFactory } from "./providers/ProviderFactory.js";
 import { AgentProfileService } from "./agents/AgentProfileService.js";
-import {
-    BrowserCouncilService,
-    type CouncilProviderId,
-    type CouncilRunRequest,
-} from "./council/index.js";
 
 import type { AIChatRequest } from "./contracts/AIChatRequest.js";
 
@@ -16,7 +11,6 @@ export class AIController {
         private readonly aiService: AIService,
         private readonly providerFactory: ProviderFactory,
         private readonly profiles: AgentProfileService,
-        private readonly browserCouncil: BrowserCouncilService,
     ) {}
 
     public agents = (_req: Request, res: Response): void => {
@@ -38,30 +32,5 @@ export class AIController {
 
     public providers = (_req: Request, res: Response): void => {
         res.json({ providers: this.providerFactory.list() });
-    };
-
-    public councilStatus = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
-        try {
-            res.json({ providers: await this.browserCouncil.status() });
-        } catch (error) {
-            next(error);
-        }
-    };
-
-    public councilConnect = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-        try {
-            res.json(await this.browserCouncil.connect(req.params.provider as CouncilProviderId));
-        } catch (error) {
-            next(error);
-        }
-    };
-
-    public councilRun = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-        try {
-            const request = req.body as CouncilRunRequest;
-            res.json(await this.browserCouncil.run(request));
-        } catch (error) {
-            next(error);
-        }
     };
 }

@@ -33,7 +33,6 @@ import { ToolExecutor } from "../modules/ai/tools/ToolExecutor.js";
 import { ReadFileTool } from "../modules/ai/tools/ReadFileTool.js";
 import { ListFilesTool } from "../modules/ai/tools/ListFilesTool.js";
 import { EditFileTool } from "../modules/ai/tools/EditFileTool.js";
-import { BrowserCouncilService } from "../modules/ai/council/index.js";
 
 import {
     IntegrationsController,
@@ -80,7 +79,6 @@ export class Container {
     public readonly agentProfiles: AgentProfileService;
     public readonly aiService: AIService;
     public readonly aiController: AIController;
-    public readonly browserCouncil: BrowserCouncilService;
 
     public readonly microsoftOAuth: MicrosoftOAuthService;
     public readonly microsoftGraph: MicrosoftGraphService;
@@ -167,9 +165,6 @@ export class Container {
 
         this.providerFactory =
             new ProviderFactory();
-
-        this.browserCouncil =
-            new BrowserCouncilService(this.workspaceRoot);
 
         this.agentProfiles =
             new AgentProfileService();
@@ -283,7 +278,6 @@ export class Container {
                 this.aiService,
                 this.providerFactory,
                 this.agentProfiles,
-                this.browserCouncil,
             );
 
         this.integrationsController =

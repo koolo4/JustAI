@@ -138,3 +138,23 @@ Responsibilities:
 Backend remains source of truth.
 
 Frontend does not access filesystem directly.
+
+---
+
+## ADR-005
+Date: 21.10.2026
+
+Title:
+Browser Council removed
+
+Decision:
+Playwright automation of chatgpt.com, claude.ai and deepseek web UIs is removed, together with `.justai/browser-profiles`.
+
+Reason:
+- Automating third-party chat web UIs violates their terms of service and risks account bans.
+- Selectors break on every UI change of those sites.
+- Logged-in browser profiles were stored inside the workspace and were readable by agent tools.
+
+Consequences:
+- The "council of models" idea moves to MASTER_PLAN task P5-03 and will use official provider APIs only.
+- `playwright` stays as a dependency for the future local-UI verification tool (P3-03), which only opens localhost.
