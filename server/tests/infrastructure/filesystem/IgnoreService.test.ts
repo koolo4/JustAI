@@ -1,19 +1,36 @@
-import { IgnoreService } from '../../../src/infrastructure/filesystem/IgnoreService.js';
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-async function main() {
+import { IgnoreService } from "../../../src/infrastructure/filesystem/IgnoreService.js";
+import { createTempWorkspace, type TempWorkspace } from "../../helpers/tempWorkspace.js";
 
-    const ignore = new IgnoreService(process.cwd());
+describe("IgnoreService", () => {
+    let workspace: TempWorkspace;
 
-    await ignore.initialize();
+    beforeEach(async () => {
+        workspace = await createTempWorkspace();
+    });
 
-    console.log(ignore.getRules());
+    afterEach(async () => {
+        await workspace.dispose();
+    });
 
-    console.log(ignore.shouldIgnore('.git'));
+    it("ignores built-in folders without a .gitignore", async () => {
+        const ignore = new IgnoreService(workspace.root);
+        await ignore.initialize();
 
-    console.log(ignore.shouldIgnore('node_modules'));
+        expect(ignore.shouldIgnore(".git")).toBe(true);
+        expect(ignore.shouldIgnore("node_modules")).toBe(true);
+        expect(ignore.shouldIgnore("src")).toBe(false);
+    });
 
-    console.log(ignore.shouldIgnore('src'));
+    it("reads rules from .gitignore, including directory rules with a trailing slash and CRLF", async () => {
+        await workspace.write(".gitignore", "# comment\r\n.cache/\r\nsecret.txt\r\n\r\n");
 
-}
+        const ignore = new IgnoreService(workspace.root);
+        await ignore.initialize();
 
-main().catch(console.error);
+        expect(ignore.shouldIgnore(".cache")).toBe(true);
+        expect(ignore.shouldIgnore("secret.txt")).toBe(true);
+        expect(ignore.shouldIgnore("# comment")).toBe(false);
+    });
+});

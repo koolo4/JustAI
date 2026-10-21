@@ -1,21 +1,19 @@
-import { PathResolver } from '../../../src/infrastructure/filesystem/PathResolver.js';
+import path from "node:path";
 
-const resolver = new PathResolver(process.cwd());
+import { describe, expect, it } from "vitest";
 
-console.log('Workspace:', resolver.getRoot());
+import { PathResolver } from "../../../src/infrastructure/filesystem/PathResolver.js";
 
-console.log(resolver.resolve('package.json'));
+describe("PathResolver", () => {
+    const root = path.resolve("/workspace/project");
+    const resolver = new PathResolver(root);
 
-console.log(
-    resolver.relative(
-        resolver.resolve('package.json')
-    )
-);
+    it("resolves workspace-relative paths", () => {
+        expect(resolver.resolve("package.json")).toBe(path.join(root, "package.json"));
+        expect(resolver.relative(path.join(root, "src", "a.ts"))).toBe(path.join("src", "a.ts"));
+    });
 
-try {
-    console.log(
-        resolver.resolve('../../../Windows')
-    );
-} catch {
-    console.log('✔ Защита работает');
-}
+    it("rejects paths that escape the workspace", () => {
+        expect(() => resolver.resolve("../../Windows")).toThrow();
+    });
+});

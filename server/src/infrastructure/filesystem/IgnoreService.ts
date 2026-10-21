@@ -34,9 +34,10 @@ export class IgnoreService {
                 'utf8',
             );
 
-            for (const line of content.split('\n')) {
+            for (const line of content.split(/\r?\n/)) {
 
-                const rule = line.trim();
+                // "dir/" в .gitignore означает папку; сравнение идёт по имени
+                const rule = line.trim().replace(/\/+$/, '');
 
                 if (
                     rule.length === 0 ||
