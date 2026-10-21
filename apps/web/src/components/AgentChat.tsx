@@ -20,6 +20,7 @@ import { useAgentSession, type ToolProgress } from "../hooks/useAgentSession";
 import { fetchProfiles, fetchProviders, fetchSessions } from "../services/agentApi";
 import { IntegrationCard } from "./IntegrationCard";
 import { SessionChanges } from "./SessionChanges";
+import { SessionList } from "./SessionList";
 
 export interface ReviewRequest {
     sessionId: string;
@@ -39,6 +40,7 @@ export function AgentChat({ onReview }: { onReview?: (request: ReviewRequest) =>
     const [mode, setMode] = useState<PermissionMode>("ask");
     const [executorProvider, setExecutorProvider] = useState("ollama");
     const [verify, setVerify] = useState(true);
+    const [showSessions, setShowSessions] = useState(false);
     const verifyEnabled = agent.session?.verify ?? verify;
     const [prompt, setPrompt] = useState("");
     const [loadError, setLoadError] = useState("");
@@ -124,6 +126,13 @@ export function AgentChat({ onReview }: { onReview?: (request: ReviewRequest) =>
 
                     <div className="ai-actions">
                         <button
+                            className={`secondary-button${showSessions ? " pressed" : ""}`}
+                            onClick={() => setShowSessions(value => !value)}
+                            aria-expanded={showSessions}
+                        >
+                            Sessions ({sessions.length})
+                        </button>
+                        <button
                             className="secondary-button"
                             onClick={agent.reset}
                             disabled={running}
@@ -132,6 +141,22 @@ export function AgentChat({ onReview }: { onReview?: (request: ReviewRequest) =>
                         </button>
                     </div>
                 </div>
+
+                {showSessions && (
+                    <SessionList
+                        sessions={sessions}
+                        activeId={agent.session?.id}
+                        disabled={running}
+                        onOpen={id => {
+                            void agent.open(id);
+                            setShowSessions(false);
+                        }}
+                        onNew={() => {
+                            agent.reset();
+                            setShowSessions(false);
+                        }}
+                    />
+                )}
 
                 <div className="ai-selects">
                     <label>
@@ -209,28 +234,6 @@ export function AgentChat({ onReview }: { onReview?: (request: ReviewRequest) =>
                         <span className="muted">Auto-check after changes</span>
                     </label>
 
-                    <label>
-                        <span className="muted">History</span>
-                        <select
-                            value={agent.session?.id ?? ""}
-                            onChange={event => {
-                                if (event.target.value) {
-                                    void agent.open(event.target.value);
-                                }
-                                else {
-                                    agent.reset();
-                                }
-                            }}
-                            disabled={running}
-                        >
-                            <option value="">— new —</option>
-                            {sessions.map(item => (
-                                <option key={item.id} value={item.id}>
-                                    {item.title}
-                                </option>
-                            ))}
-                        </select>
-                    </label>
                 </div>
 
                 <IntegrationCard />

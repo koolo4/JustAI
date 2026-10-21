@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { AgentChat, type ReviewRequest } from "../components/AgentChat";
 import { DiffReview } from "../components/diff/DiffReview";
 import { FileTree } from "../components/FileTree";
+import { PanelBoundary } from "../components/PanelBoundary";
 import { useIDEContext } from "../context/useIDEContext";
 import { CodeEditor } from "../editor/CodeEditor";
 import { useEditorTabs } from "../editor/useEditorTabs";
@@ -90,10 +91,13 @@ export function App() {
 
             <main className="layout">
                 <aside className="panel left">
-                    <FileTree nodes={tree} onSelect={handleSelect} activePath={editor.active} />
+                    <PanelBoundary name="File tree">
+                        <FileTree nodes={tree} onSelect={handleSelect} activePath={editor.active} />
+                    </PanelBoundary>
                 </aside>
 
                 <section className="panel center">
+                    <PanelBoundary name="Editor">
                     {review ? (
                         <DiffReview
                             sessionId={review.sessionId}
@@ -117,10 +121,13 @@ export function App() {
                         onKeepMine={editor.keepMine}
                     />
                     )}
+                    </PanelBoundary>
                 </section>
 
                 <aside className="panel right">
-                    <AgentChat onReview={setReview} />
+                    <PanelBoundary name="Agent panel">
+                        <AgentChat onReview={setReview} />
+                    </PanelBoundary>
                 </aside>
             </main>
         </div>

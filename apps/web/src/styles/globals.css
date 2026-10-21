@@ -610,6 +610,103 @@ button {
     grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.panel-crash {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    color: #ffb4b4;
+}
+
+.panel-crash pre {
+    white-space: pre-wrap;
+    font-size: 12px;
+    background: #321d20;
+    padding: 8px;
+    border-radius: 6px;
+}
+
+.ai-actions {
+    display: flex;
+    gap: 6px;
+}
+
+.secondary-button.pressed {
+    background: #24324a;
+    border-color: #3b5bdb;
+}
+
+.session-list {
+    margin-top: 10px;
+    border: 1px solid #2b333d;
+    border-radius: 8px;
+    background: #12161b;
+    font-size: 12px;
+}
+
+.session-list-header {
+    display: flex;
+    gap: 6px;
+    padding: 6px;
+    border-bottom: 1px solid #242a32;
+}
+
+.session-search {
+    flex: 1;
+    min-width: 0;
+    background: #0c0f12;
+    color: #e8edf2;
+    border: 1px solid #303842;
+    border-radius: 6px;
+    padding: 5px 8px;
+    font: inherit;
+}
+
+.session-list ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 260px;
+    overflow: auto;
+}
+
+.session-list li {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 8px;
+    cursor: pointer;
+    border-bottom: 1px solid #1a1f26;
+}
+
+.session-list li:hover { background: #171c22; }
+.session-list li.active { background: #1e2a3d; cursor: default; }
+.session-list li.disabled { cursor: not-allowed; opacity: .6; }
+.session-list .session-empty { cursor: default; }
+
+.session-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.session-meta { white-space: nowrap; }
+
+.session-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #5b6673;
+    flex-shrink: 0;
+}
+
+.session-dot.running { background: #f6ad55; }
+.session-dot.completed { background: #68d391; }
+.session-dot.failed { background: #fc8181; }
+.session-dot.stopped { background: #a0aec0; }
+
 .verification-card {
     border: 1px solid #2b333d;
     border-radius: 8px;
