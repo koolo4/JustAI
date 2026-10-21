@@ -23,6 +23,7 @@ import { ToolError, type Tool } from "../tools/Tool.js";
 import { toToolSpec } from "../tools/ToolRegistry.js";
 import { DELEGATE_TOOL } from "../tools/delegateTool.js";
 import { Budget, type BudgetLimits } from "./Budget.js";
+import { fitToContextWindow } from "./ContextWindow.js";
 import { formatVerificationFailure, type VerificationOutcome } from "./Verifier.js";
 
 const DEFAULT_VERIFY_ATTEMPTS = 3;
@@ -244,10 +245,23 @@ export class AgentLoop {
     }
 
     private async callModel(messages: Message[]): Promise<ModelTurn> {
+        const tools = this.options.tools.map(toToolSpec);
+        const window = this.options.provider.contextWindow;
+
+        // Для моделей с маленьким окном отправляется ужатая копия истории; сохранённая не меняется.
+        const view = window
+            ? fitToContextWindow(messages, {
+                window: window.tokens,
+                reserveForOutput: window.reserveForOutput,
+                system: this.options.system,
+                tools,
+            }).messages
+            : messages;
+
         const stream = this.options.provider.stream({
             system: this.options.system,
-            messages,
-            tools: this.options.tools.map(toToolSpec),
+            messages: view,
+            tools,
             signal: this.options.signal,
         });
 

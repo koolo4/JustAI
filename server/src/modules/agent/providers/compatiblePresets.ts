@@ -15,6 +15,8 @@ export interface CompatiblePreset {
     keyEnv: string[];
     defaultModel?: string;
     local: boolean;
+    /** Окно контекста по умолчанию (переопределяется <PREFIX>_CONTEXT). */
+    contextTokens: number;
     streamUsage?: boolean;
     headers?: Record<string, string>;
 }
@@ -28,6 +30,7 @@ export const COMPATIBLE_PRESETS: CompatiblePreset[] = [
         keyEnv: [],
         defaultModel: "qwen2.5-coder:7b",
         local: true,
+        contextTokens: 32_768,
     },
     {
         id: "lmstudio",
@@ -36,6 +39,7 @@ export const COMPATIBLE_PRESETS: CompatiblePreset[] = [
         baseURL: "http://127.0.0.1:1234/v1",
         keyEnv: [],
         local: true,
+        contextTokens: 32_768,
     },
     {
         id: "openrouter",
@@ -44,6 +48,7 @@ export const COMPATIBLE_PRESETS: CompatiblePreset[] = [
         baseURL: "https://openrouter.ai/api/v1",
         keyEnv: ["OPENROUTER_API_KEY"],
         local: false,
+        contextTokens: 128_000,
         headers: { "X-Title": "JustAI" },
     },
     {
@@ -54,6 +59,7 @@ export const COMPATIBLE_PRESETS: CompatiblePreset[] = [
         keyEnv: ["GROQ_API_KEY"],
         defaultModel: "llama-3.3-70b-versatile",
         local: false,
+        contextTokens: 128_000,
     },
     {
         id: "gemini",
@@ -63,6 +69,7 @@ export const COMPATIBLE_PRESETS: CompatiblePreset[] = [
         keyEnv: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
         defaultModel: "gemini-2.5-flash",
         local: false,
+        contextTokens: 128_000,
     },
     {
         id: "github",
@@ -72,6 +79,7 @@ export const COMPATIBLE_PRESETS: CompatiblePreset[] = [
         keyEnv: ["GITHUB_MODELS_TOKEN", "GITHUB_TOKEN"],
         defaultModel: "openai/gpt-4.1",
         local: false,
+        contextTokens: 128_000,
     },
     {
         id: "deepseek",
@@ -81,6 +89,7 @@ export const COMPATIBLE_PRESETS: CompatiblePreset[] = [
         keyEnv: ["DEEPSEEK_API_KEY"],
         defaultModel: "deepseek-chat",
         local: false,
+        contextTokens: 128_000,
     },
 ];
 
@@ -94,6 +103,7 @@ export interface ResolvedPreset {
     apiKey: string;
     model: string | undefined;
     maxOutputTokens: number;
+    contextTokens: number;
     configured: boolean;
 }
 
@@ -101,6 +111,7 @@ export function resolvePreset(preset: CompatiblePreset, env: NodeJS.ProcessEnv, 
     const apiKey = preset.keyEnv.map(name => env[name]).find(Boolean) ?? "";
     const resolvedModel = model || env[`${preset.prefix}_MODEL`] || preset.defaultModel;
     const maxTokens = Number(env[`${preset.prefix}_MAX_TOKENS`]);
+    const context = Number(env[`${preset.prefix}_CONTEXT`]);
 
     return {
         preset,
@@ -108,6 +119,7 @@ export function resolvePreset(preset: CompatiblePreset, env: NodeJS.ProcessEnv, 
         apiKey,
         model: resolvedModel,
         maxOutputTokens: Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : 8192,
+        contextTokens: Number.isFinite(context) && context > 0 ? context : preset.contextTokens,
         configured: Boolean(resolvedModel) && (preset.local || Boolean(apiKey)),
     };
 }

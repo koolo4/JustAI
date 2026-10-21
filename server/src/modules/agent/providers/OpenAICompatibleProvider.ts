@@ -35,6 +35,8 @@ export interface OpenAICompatibleOptions {
     streamUsage?: boolean;
     /** Дополнительные заголовки (например, для OpenRouter). */
     headers?: Record<string, string>;
+    /** Окно контекста модели в токенах (для ужатия истории). */
+    contextTokens?: number;
 }
 
 /**
@@ -51,6 +53,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
 
     public readonly model: string;
 
+    public readonly contextWindow?: { tokens: number; reserveForOutput: number };
+
     private readonly client: OpenAI;
 
     private readonly maxOutputTokens: number;
@@ -62,6 +66,14 @@ export class OpenAICompatibleProvider implements ModelProvider {
         this.model = options.model;
         this.maxOutputTokens = options.maxOutputTokens ?? 8192;
         this.streamUsage = options.streamUsage ?? true;
+
+        if (options.contextTokens) {
+            this.contextWindow = {
+                tokens: options.contextTokens,
+                // Ответ модели делит окно с промптом (так у Ollama и большинства локальных серверов).
+                reserveForOutput: Math.min(this.maxOutputTokens, Math.floor(options.contextTokens / 4)),
+            };
+        }
 
         this.client = new OpenAI({
             baseURL: options.baseURL,

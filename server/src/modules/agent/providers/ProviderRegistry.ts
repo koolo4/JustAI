@@ -98,6 +98,7 @@ export class ProviderRegistry {
                     apiKey: resolved.apiKey,
                     model: resolved.model,
                     maxOutputTokens: resolved.maxOutputTokens,
+                    contextTokens: resolved.contextTokens,
                     ...(preset.streamUsage === undefined ? {} : { streamUsage: preset.streamUsage }),
                     ...(preset.headers ? { headers: preset.headers } : {}),
                 });

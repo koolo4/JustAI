@@ -41,6 +41,12 @@ export interface ModelProvider {
     readonly model: string;
 
     /**
+     * Окно контекста, если историю нужно ужимать на стороне клиента (локальные и бесплатные модели).
+     * Не задано — история отправляется целиком (у Anthropic правка прошлых сообщений ломает thinking-блоки).
+     */
+    readonly contextWindow?: { tokens: number; reserveForOutput: number };
+
+    /**
      * Стримит один ответ модели. Последнее событие — всегда "done".
      * Ошибки API пробрасываются как исключения; ModelOutputError — повторяемая ошибка формата ответа.
      */
