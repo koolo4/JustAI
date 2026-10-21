@@ -28,7 +28,6 @@ import { ProviderFactory } from "../modules/ai/providers/ProviderFactory.js";
 import { PromptBuilder } from "../modules/ai/prompt/PromptBuilder.js";
 import { AgentProfileService } from "../modules/ai/agents/AgentProfileService.js";
 import { Agent } from "../modules/ai/agent/Agent.js";
-import { Planner } from "../modules/ai/agent/Planner.js";
 import { ToolRegistry } from "../modules/ai/tools/ToolRegistry.js";
 import { ToolExecutor } from "../modules/ai/tools/ToolExecutor.js";
 import { ReadFileTool } from "../modules/ai/tools/ReadFileTool.js";
@@ -74,7 +73,6 @@ export class Container {
     public readonly editFileTool: EditFileTool;
 
     public readonly toolExecutor: ToolExecutor;
-    public readonly planner: Planner;
     public readonly agent: Agent;
 
     public readonly providerFactory: ProviderFactory;
@@ -279,12 +277,8 @@ export class Container {
                 this.toolRegistry,
             );
 
-        this.planner =
-            new Planner();
-
         this.agent =
             new Agent(
-                this.planner,
                 this.toolExecutor,
             );
 
