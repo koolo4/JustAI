@@ -61,6 +61,15 @@ describe("resolveSafePath", () => {
         await expect(resolveSafePath(root, outside, "read")).rejects.toThrow(ForbiddenError);
     });
 
+    it("treats '/' and '/src' from models as the workspace root, still confined", async () => {
+        await expect(resolveSafePath(root, "/", "read")).resolves.toBe(root);
+        await expect(resolveSafePath(root, "/src", "read")).resolves.toBe(path.join(root, "src"));
+        await expect(resolveSafePath(root, "\\src", "read")).resolves.toBe(path.join(root, "src"));
+        // Выход наверх по-прежнему запрещён, а UNC-пути не переписываются.
+        await expect(resolveSafePath(root, "/../app-evil/x.txt", "read")).rejects.toThrow(ForbiddenError);
+        await expect(resolveSafePath(root, "//server/share/x", "read")).rejects.toThrow(ForbiddenError);
+    });
+
     it("denies .justai always and .git for writing", async () => {
         await expect(resolveSafePath(root, ".justai/sessions/a.jsonl", "read")).rejects.toThrow(ForbiddenError);
         await expect(resolveSafePath(root, ".git/config", "write")).rejects.toThrow(ForbiddenError);

@@ -104,6 +104,7 @@ export interface ResolvedPreset {
     model: string | undefined;
     maxOutputTokens: number;
     contextTokens: number;
+    reasoningEffort: string | undefined;
     configured: boolean;
 }
 
@@ -121,6 +122,7 @@ export function resolvePreset(preset: CompatiblePreset, env: NodeJS.ProcessEnv, 
         // Локальные модели медленные: длинный ответ — чаще всего зацикливание.
         maxOutputTokens: Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : (preset.local ? 4096 : 8192),
         contextTokens: Number.isFinite(context) && context > 0 ? context : preset.contextTokens,
+        reasoningEffort: env[`${preset.prefix}_REASONING_EFFORT`] || undefined,
         configured: Boolean(resolvedModel) && (preset.local || Boolean(apiKey)),
     };
 }

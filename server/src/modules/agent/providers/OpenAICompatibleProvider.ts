@@ -37,6 +37,11 @@ export interface OpenAICompatibleOptions {
     headers?: Record<string, string>;
     /** Окно контекста модели в токенах (для ужатия истории). */
     contextTokens?: number;
+    /**
+     * reasoning_effort для «думающих» моделей. "none" выключает размышления
+     * (у qwen3 в Ollama это в разы быстрее; think:false и /no_think сервер игнорирует).
+     */
+    reasoningEffort?: string;
 }
 
 /**
@@ -64,11 +69,14 @@ export class OpenAICompatibleProvider implements ModelProvider {
 
     private readonly streamUsage: boolean;
 
+    private readonly reasoningEffort: string | undefined;
+
     constructor(options: OpenAICompatibleOptions) {
         this.id = options.id;
         this.model = options.model;
         this.maxOutputTokens = options.maxOutputTokens ?? 8192;
         this.streamUsage = options.streamUsage ?? true;
+        this.reasoningEffort = options.reasoningEffort;
 
         if (options.contextTokens) {
             this.contextWindow = {
@@ -109,6 +117,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
                     max_tokens: this.maxOutputTokens,
                     stream: true,
                     ...(this.streamUsage ? { stream_options: { include_usage: true } } : {}),
+                    // Значение "none" есть у Ollama, но не в типах OpenAI SDK.
+                    ...(this.reasoningEffort ? { reasoning_effort: this.reasoningEffort as "low" } : {}),
                 },
                 { signal },
             );

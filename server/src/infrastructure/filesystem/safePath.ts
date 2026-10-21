@@ -54,7 +54,7 @@ export async function resolveSafePath(
     target: string,
     access: PathAccess,
 ): Promise<string> {
-    const absolute = resolveInside(root, target);
+    const absolute = resolveInside(root, agentRelative(root, target));
     const relative = path.relative(root, absolute);
     const firstSegment = relative.split(path.sep)[0] ?? '';
 
@@ -76,6 +76,20 @@ export async function resolveSafePath(
     }
 
     return absolute;
+}
+
+/**
+ * Модели часто пишут «/» или «/src/a.ts», имея в виду корень проекта (привычка Linux-песочниц).
+ * Такой путь вне workspace трактуется относительно корня; проверка вложенности остаётся прежней.
+ */
+export function agentRelative(root: string, target: string): string {
+    const isRooted = /^[\\/](?![\\/])/.test(target);
+
+    if (!isRooted || isInside(root, path.resolve(root, target))) {
+        return target;
+    }
+
+    return target.replace(/^[\\/]+/, "") || ".";
 }
 
 /**

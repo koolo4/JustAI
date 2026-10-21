@@ -99,6 +99,7 @@ export class ProviderRegistry {
                     model: resolved.model,
                     maxOutputTokens: resolved.maxOutputTokens,
                     contextTokens: resolved.contextTokens,
+                    ...(resolved.reasoningEffort ? { reasoningEffort: resolved.reasoningEffort } : {}),
                     ...(preset.streamUsage === undefined ? {} : { streamUsage: preset.streamUsage }),
                     ...(preset.headers ? { headers: preset.headers } : {}),
                 });
