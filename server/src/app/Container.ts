@@ -10,7 +10,15 @@ import { WorkspaceController } from "../modules/workspace/WorkspaceController.js
 
 import { ConfigService } from "../core/config/index.js";
 import { ConsoleLogger, ILogger } from "../core/logger/index.js";
-import { EventBus } from "../core/events/index.js";
+import {
+    EventBus,
+    FileCreatedEvent,
+    FileDeletedEvent,
+    FileSavedEvent,
+} from "../core/events/index.js";
+import { GitService } from "../infrastructure/git/GitService.js";
+import { SnapshotService } from "../infrastructure/git/SnapshotService.js";
+import { createGitTools } from "../modules/agent/tools/gitTools.js";
 import { AccessGuard } from "../core/security/AccessGuard.js";
 
 import {
@@ -64,6 +72,7 @@ export class Container {
         WebSocketGateway;
 
     public readonly processManager: ProcessManager;
+    public readonly gitService: GitService;
     public readonly toolRegistry: ToolRegistry;
     public readonly providerRegistry: ProviderRegistry;
     public readonly agentProfiles: AgentProfiles;
@@ -207,6 +216,15 @@ export class Container {
         this.processManager =
             new ProcessManager();
 
+        this.gitService =
+            new GitService();
+
+        const snapshots =
+            new SnapshotService(
+                this.gitService,
+                this.workspaceRoot,
+            );
+
         this.toolRegistry =
             new ToolRegistry();
 
@@ -214,6 +232,7 @@ export class Container {
             ...createFileTools(agentFiles, shouldIgnore),
             ...createSearchTools(agentFiles),
             ...createShellTools(agentFiles, this.processManager),
+            ...createGitTools(this.gitService, this.workspaceRoot),
             ...createWordTools(this.microsoftGraph),
         ]) {
             this.toolRegistry.register(tool);
@@ -240,6 +259,18 @@ export class Container {
                     rulesFile: path.join(this.workspaceRoot, ".justai", "permissions.json"),
                     emit: broadcast,
                 }),
+                snapshots,
+                onReverted: async changes => {
+                    for (const change of changes) {
+                        await this.eventBus.publish(
+                            change.status === "modified"
+                                ? new FileSavedEvent(change.path)
+                                : change.status === "added"
+                                    ? new FileDeletedEvent(change.path)
+                                    : new FileCreatedEvent(change.path),
+                        );
+                    }
+                },
                 emit: broadcast,
             });
 

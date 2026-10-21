@@ -22,6 +22,8 @@ export interface Tool<Schema extends z.ZodType = z.ZodType> {
     readonly description: string;
     readonly inputSchema: Schema;
     readonly kind: ToolKind;
+    /** Спрашивать пользователя в любом режиме (например, git commit). */
+    readonly requiresApproval?: boolean;
     run(input: z.infer<Schema>, context: ToolContext): Promise<ToolOutput>;
 }
 

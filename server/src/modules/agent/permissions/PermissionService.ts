@@ -155,6 +155,14 @@ export class PermissionService {
         const { tool, input } = request;
         const allowed = this.sessionAllow.get(sessionId) ?? new Set<string>();
 
+        if (tool.requiresApproval) {
+            const key = `tool:${tool.name}`;
+
+            return allowed.has(key)
+                ? { action: "allow", reason: "allowed for this session", dangerous: false }
+                : { action: "ask", reason: "always requires your approval", dangerous: false, sessionKey: key };
+        }
+
         switch (tool.kind) {
             case "read":
                 return { action: "allow", reason: "read-only", dangerous: false };

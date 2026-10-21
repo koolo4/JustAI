@@ -12,7 +12,7 @@ const PROFILES: AgentProfile[] = [
         id: "coder",
         label: "Code Agent",
         description: "Reads, edits and runs code in the local workspace: tests, builds, scripts.",
-        tools: ["read_file", "list_dir", "glob", "grep", "edit_file", "write_file", "run_command", "read_output", "kill_process", "list_processes"],
+        tools: ["read_file", "list_dir", "glob", "grep", "edit_file", "write_file", "run_command", "read_output", "kill_process", "list_processes", "git_status", "git_diff", "git_log", "git_commit"],
         instructions: [
             "You are working as a senior software engineer on the user's project.",
             "Before changing code, read the relevant files and follow the conventions you find there.",
@@ -24,7 +24,7 @@ const PROFILES: AgentProfile[] = [
         id: "general",
         label: "General Agent",
         description: "Workspace files plus connected services (OneDrive / Word).",
-        tools: ["read_file", "list_dir", "glob", "grep", "edit_file", "write_file", "run_command", "read_output", "kill_process", "list_processes", "word_read", "word_edit"],
+        tools: ["read_file", "list_dir", "glob", "grep", "edit_file", "write_file", "run_command", "read_output", "kill_process", "list_processes", "git_status", "git_diff", "git_log", "git_commit", "word_read", "word_edit"],
         instructions: [
             "Help the user with their request using the available tools.",
             "Never claim that a change succeeded unless the tool result says so.",

@@ -37,6 +37,23 @@ export interface SessionDetails {
     pendingPermissions: PermissionRequest[];
 }
 
+export interface FileChange {
+    path: string;
+    status: "added" | "modified" | "deleted";
+}
+
+/** Изменения рабочей папки с момента первой правки агента в сессии. */
+export interface SessionChangesResponse {
+    /** false — git не найден, снапшоты и откат недоступны. */
+    available: boolean;
+    files: FileChange[];
+    diff: string;
+}
+
+export interface RevertResponse {
+    files: FileChange[];
+}
+
 export interface SessionListResponse {
     sessions: SessionSummary[];
 }

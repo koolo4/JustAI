@@ -18,6 +18,7 @@ import { useIDEContext } from "../context/useIDEContext";
 import { useAgentSession, type ToolProgress } from "../hooks/useAgentSession";
 import { fetchProfiles, fetchProviders, fetchSessions } from "../services/agentApi";
 import { IntegrationCard } from "./IntegrationCard";
+import { SessionChanges } from "./SessionChanges";
 
 export function AgentChat() {
     const { activeFile } = useIDEContext();
@@ -245,6 +246,14 @@ export function AgentChat() {
             </div>
 
             <div className="ai-input">
+                {agent.session && (
+                    <SessionChanges
+                        sessionId={agent.session.id}
+                        refreshKey={`${agent.session.status}:${agent.messages.length}`}
+                        disabled={running}
+                    />
+                )}
+
                 {agent.run && (
                     <div className="muted run-stats">
                         Steps: {agent.run.steps} · tokens in {agent.run.usage.inputTokens}

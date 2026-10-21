@@ -5,6 +5,8 @@ import type {
     CreateSessionResponse,
     ProviderListResponse,
     ResolvePermissionRequest,
+    RevertResponse,
+    SessionChangesResponse,
     SendMessageRequest,
     UpdateSessionRequest,
     SessionDetails,
@@ -101,6 +103,14 @@ export async function resolvePermission(
         const body = await response.json().catch(() => null) as Partial<ApiErrorBody> | null;
         throw new Error(body?.error?.message ?? `${response.status} ${response.statusText}`);
     }
+}
+
+export function fetchSessionChanges(id: string): Promise<SessionChangesResponse> {
+    return request(`/agent/sessions/${encodeURIComponent(id)}/changes`);
+}
+
+export function revertSession(id: string): Promise<RevertResponse> {
+    return request(`/agent/sessions/${encodeURIComponent(id)}/revert`, { method: "POST" });
 }
 
 export async function stopSession(id: string): Promise<SessionSummary> {

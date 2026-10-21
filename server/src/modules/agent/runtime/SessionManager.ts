@@ -9,6 +9,8 @@ import {
     type SendMessageRequest,
     type SessionDetails,
     type SessionStatus,
+    type RevertResponse,
+    type SessionChangesResponse,
     type PermissionDecision,
     type PermissionMode,
     type SessionSummary,
@@ -19,6 +21,7 @@ import {
 import { BadRequestError } from "../../../core/errors/BadRequestError.js";
 import { ConflictError } from "../../../core/errors/ConflictError.js";
 import { NotFoundError } from "../../../core/errors/NotFoundError.js";
+import type { SnapshotChange, SnapshotService } from "../../../infrastructure/git/SnapshotService.js";
 import type { PermissionService } from "../permissions/PermissionService.js";
 import type { AgentProfiles } from "../profiles.js";
 import { projectTree, readProjectRules } from "../prompts/ProjectContext.js";
@@ -38,6 +41,10 @@ export interface SessionManagerDeps {
     shouldIgnore: (name: string) => boolean;
     limits: BudgetLimits;
     permissions: PermissionService;
+    /** Снапшоты для отката. Без них (нет git) откат недоступен. */
+    snapshots?: SnapshotService;
+    /** Уведомить UI о файлах, восстановленных откатом. */
+    onReverted?: (changes: SnapshotChange[]) => Promise<void>;
     emit: (event: AgentEvent) => void;
 }
 
@@ -196,6 +203,39 @@ export class SessionManager {
         }
     }
 
+    /**
+     * Изменения рабочей папки с момента первой правки агента в этой сессии.
+     */
+    public async changes(id: string): Promise<SessionChangesResponse> {
+        await this.load(id);
+
+        if (!this.deps.snapshots?.available) {
+            return { available: false, files: [], diff: "" };
+        }
+
+        return { available: true, ...await this.deps.snapshots.changes(id) };
+    }
+
+    /**
+     * Откатывает рабочую папку к состоянию до первой правки агента в сессии.
+     */
+    public async revert(id: string): Promise<RevertResponse> {
+        await this.load(id);
+
+        if (!this.deps.snapshots?.available) {
+            throw new ConflictError("Revert is unavailable: git was not found on this computer.");
+        }
+
+        if (this.running.has(id)) {
+            throw new ConflictError("Stop the agent before reverting its changes.");
+        }
+
+        const files = await this.deps.snapshots.revert(id);
+        await this.deps.onReverted?.(files);
+
+        return { files };
+    }
+
     public async stop(id: string): Promise<SessionSummary> {
         const session = await this.load(id);
         const run = this.running.get(id);
@@ -229,6 +269,9 @@ export class SessionManager {
                 signal: controller.signal,
                 emit: this.deps.emit,
                 authorizer: this.deps.permissions.forSession(summary.id, () => summary.mode),
+                ...(this.deps.snapshots?.available
+                    ? { beforeMutation: () => this.deps.snapshots!.ensure(summary.id) }
+                    : {}),
                 onMessage: message => this.addMessage(session, message),
             });
 

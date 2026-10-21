@@ -43,6 +43,8 @@ export interface AgentLoopOptions {
     emit(event: AgentEvent): void;
     /** Проверка разрешений перед вызовом инструмента. Без него всё разрешено (тесты). */
     authorizer?: Authorizer;
+    /** Вызывается перед каждым изменяющим инструментом (снапшот для отката). */
+    beforeMutation?: () => Promise<void>;
     /** Сохранить новое сообщение (вызывается для каждого сообщения по порядку). */
     onMessage(message: Message): Promise<void>;
 }
@@ -272,6 +274,15 @@ export class AgentLoop {
 
             if (!decision.allowed) {
                 return errorResult(use.id, decision.message);
+            }
+        }
+
+        if (tool.kind !== "read" && this.options.beforeMutation) {
+            try {
+                await this.options.beforeMutation();
+            }
+            catch (error) {
+                return errorResult(use.id, `Could not save a restore point before this change, so it was not made: ${errorMessage(error)}`);
             }
         }
 

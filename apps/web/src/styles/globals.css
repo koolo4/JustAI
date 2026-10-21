@@ -388,6 +388,41 @@ button {
     grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.session-changes {
+    border: 1px solid #2b333d;
+    border-radius: 8px;
+    background: #12161b;
+    font-size: 12px;
+}
+
+.session-changes summary {
+    display: flex;
+    justify-content: space-between;
+    padding: 7px 9px;
+    cursor: pointer;
+}
+
+.session-changes .permission-actions {
+    padding: 8px;
+}
+
+.change-list {
+    list-style: none;
+    margin: 0;
+    padding: 0 9px 8px;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.change-status {
+    display: inline-block;
+    width: 16px;
+    font-weight: 700;
+}
+
+.change-status.added { color: #68d391; }
+.change-status.modified { color: #f6ad55; }
+.change-status.deleted { color: #fc8181; }
+
 .run-stats {
     font-size: 11px;
 }

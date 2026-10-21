@@ -1,4 +1,8 @@
+import { readFile } from "node:fs/promises";
 import path from "node:path";
+
+import { GitService } from "../../../src/infrastructure/git/GitService.js";
+import { SnapshotService } from "../../../src/infrastructure/git/SnapshotService.js";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -50,9 +54,28 @@ describe("SessionManager", () => {
                 rulesFile: path.join(workspace.root, ".justai", "permissions.json"),
                 emit: event => events.push(event),
             }),
+            snapshots: new SnapshotService(new GitService(), workspace.root),
             emit: event => events.push(event),
         });
     }
+
+    it.skipIf(!new GitService().available)("snapshots before the first change and reverts the session", async () => {
+        const sessions = manager();
+        const { id } = await sessions.create({ provider: "mock", mode: "full-auto" });
+
+        expect((await sessions.changes(id))).toEqual({ available: true, files: [], diff: "" });
+
+        await sessions.send(id, { text: "создай файл notes/todo.md" });
+        await sessions.waitForIdle(id);
+
+        const changes = await sessions.changes(id);
+        expect(changes.files).toEqual([{ path: "notes/todo.md", status: "added" }]);
+        expect(changes.diff).toContain("+Created by the JustAI mock agent.");
+
+        expect(await sessions.revert(id)).toEqual({ files: [{ path: "notes/todo.md", status: "added" }] });
+        expect((await sessions.changes(id)).files).toEqual([]);
+        expect(await readFile(path.join(workspace.root, "src/index.ts"), "utf8")).toBe("export const answer = 42;\n");
+    }, 30_000);
 
     it("creates a session with a frozen system prompt that includes project rules", async () => {
         const sessions = manager();

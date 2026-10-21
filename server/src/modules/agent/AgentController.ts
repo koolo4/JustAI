@@ -103,6 +103,14 @@ export class AgentController {
         res.status(204).end();
     });
 
+    public sessionChanges = handle(async (req, res) => {
+        res.json(await this.sessions.changes(sessionId(req)));
+    });
+
+    public revertSession = handle(async (req, res) => {
+        res.json(await this.sessions.revert(sessionId(req)));
+    });
+
     public stopSession = handle(async (req, res) => {
         const session = await this.sessions.stop(sessionId(req));
         res.json({ session });
