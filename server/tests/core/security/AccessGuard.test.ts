@@ -22,13 +22,13 @@ describe("server perimeter", () => {
     });
 
     it("rejects API calls without a token", async () => {
-        const response = await request(app).get("/api/ai/agents").set("Host", HOST);
+        const response = await request(app).get("/api/agent/profiles").set("Host", HOST);
         expect(response.status).toBe(401);
     });
 
     it("rejects API calls with a wrong token", async () => {
         const response = await request(app)
-            .get("/api/ai/agents")
+            .get("/api/agent/profiles")
             .set("Host", HOST)
             .set("Authorization", "Bearer wrong");
         expect(response.status).toBe(401);
@@ -36,7 +36,7 @@ describe("server perimeter", () => {
 
     it("accepts API calls with the token", async () => {
         const response = await request(app)
-            .get("/api/ai/agents")
+            .get("/api/agent/profiles")
             .set("Host", HOST)
             .set("Origin", FRONTEND)
             .set("Authorization", `Bearer ${TOKEN}`);
@@ -46,11 +46,11 @@ describe("server perimeter", () => {
 
     it("rejects a foreign Origin even with a valid token", async () => {
         const response = await request(app)
-            .post("/api/ai/chat")
+            .post("/api/agent/sessions")
             .set("Host", HOST)
             .set("Origin", "https://evil.example")
             .set("Authorization", `Bearer ${TOKEN}`)
-            .send({ prompt: "hi" });
+            .send({});
         expect(response.status).toBe(403);
     });
 

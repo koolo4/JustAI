@@ -18,30 +18,22 @@ import {
     WebSocketGateway,
 } from "../modules/websocket/index.js";
 
-import {
-    AIController,
-    AIService,
-} from "../modules/ai/index.js";
-
-import { ContextService } from "../modules/ai/context/ContextService.js";
-import { ProviderFactory } from "../modules/ai/providers/ProviderFactory.js";
-import { PromptBuilder } from "../modules/ai/prompt/PromptBuilder.js";
-import { AgentProfileService } from "../modules/ai/agents/AgentProfileService.js";
-import { Agent } from "../modules/ai/agent/Agent.js";
-import { ToolRegistry } from "../modules/ai/tools/ToolRegistry.js";
-import { ToolExecutor } from "../modules/ai/tools/ToolExecutor.js";
-import { ReadFileTool } from "../modules/ai/tools/ReadFileTool.js";
-import { ListFilesTool } from "../modules/ai/tools/ListFilesTool.js";
-import { EditFileTool } from "../modules/ai/tools/EditFileTool.js";
+import { AgentController } from "../modules/agent/AgentController.js";
+import { AgentProfiles } from "../modules/agent/profiles.js";
+import { ProviderRegistry } from "../modules/agent/providers/ProviderRegistry.js";
+import { budgetFromEnv } from "../modules/agent/runtime/Budget.js";
+import { SessionManager } from "../modules/agent/runtime/SessionManager.js";
+import { SessionStore } from "../modules/agent/runtime/SessionStore.js";
+import { createFileTools } from "../modules/agent/tools/fileTools.js";
+import { ToolRegistry } from "../modules/agent/tools/ToolRegistry.js";
 
 import {
     IntegrationsController,
     MicrosoftOAuthService,
     MicrosoftTokenStore,
     MicrosoftGraphService,
-    WordEditTool,
-    WordReadTool,
 } from "../modules/integrations/index.js";
+import { createWordTools } from "../modules/integrations/microsoft/wordTools.js";
 
 export class Container {
 
@@ -64,47 +56,24 @@ export class Container {
     public readonly webSocketGateway:
         WebSocketGateway;
 
-    public readonly contextService: ContextService;
-    public readonly promptBuilder: PromptBuilder;
     public readonly toolRegistry: ToolRegistry;
-
-    public readonly readFileTool: ReadFileTool;
-    public readonly listFilesTool: ListFilesTool;
-    public readonly editFileTool: EditFileTool;
-
-    public readonly toolExecutor: ToolExecutor;
-    public readonly agent: Agent;
-
-    public readonly providerFactory: ProviderFactory;
-    public readonly agentProfiles: AgentProfileService;
-    public readonly aiService: AIService;
-    public readonly aiController: AIController;
+    public readonly providerRegistry: ProviderRegistry;
+    public readonly agentProfiles: AgentProfiles;
+    public readonly sessionManager: SessionManager;
+    public readonly agentController: AgentController;
 
     public readonly microsoftOAuth: MicrosoftOAuthService;
     public readonly microsoftGraph: MicrosoftGraphService;
     public readonly integrationsController:
         IntegrationsController;
 
-    public readonly wordEditTool: WordEditTool;
-    public readonly wordReadTool: WordReadTool;
-
     private readonly configService: ConfigService;
     private readonly logger: ILogger;
 
     constructor() {
 
-        const currentDirectory =
-            process.cwd();
-
         this.workspaceRoot =
-            path.basename(
-                currentDirectory,
-            ).toLowerCase() === "server"
-                ? path.resolve(
-                    currentDirectory,
-                    "..",
-                )
-                : currentDirectory;
+            resolveWorkspaceRoot();
 
         this.configService =
             new ConfigService();
@@ -181,53 +150,6 @@ export class Container {
                 this.webSocketConnectionManager,
             );
 
-        this.contextService =
-            new ContextService();
-
-        this.promptBuilder =
-            new PromptBuilder();
-
-        this.providerFactory =
-            new ProviderFactory();
-
-        this.agentProfiles =
-            new AgentProfileService();
-
-        const defaultProvider =
-            this.providerFactory.create(
-                process.env.JUSTAI_PROVIDER ?? "mock",
-            );
-
-        this.toolRegistry =
-            new ToolRegistry();
-
-        this.readFileTool =
-            new ReadFileTool(
-                this.workspaceRoot,
-            );
-
-        this.listFilesTool =
-            new ListFilesTool(
-                this.workspaceRoot,
-            );
-
-        this.editFileTool =
-            new EditFileTool(
-                this.workspaceRoot,
-            );
-
-        this.toolRegistry.register(
-            this.readFileTool,
-        );
-
-        this.toolRegistry.register(
-            this.listFilesTool,
-        );
-
-        this.toolRegistry.register(
-            this.editFileTool,
-        );
-
         const tokenStore =
             new MicrosoftTokenStore(
                 this.workspaceRoot,
@@ -254,55 +176,51 @@ export class Container {
                 this.microsoftOAuth,
             );
 
-        this.wordEditTool =
-            new WordEditTool(
-                this.microsoftGraph,
-            );
-
-        this.wordReadTool =
-            new WordReadTool(
-                this.microsoftGraph,
-            );
-
-        this.toolRegistry.register(
-            this.wordEditTool,
-        );
-
-        this.toolRegistry.register(
-            this.wordReadTool,
-        );
-
-        this.toolExecutor =
-            new ToolExecutor(
-                this.toolRegistry,
-            );
-
-        this.agent =
-            new Agent(
-                this.toolExecutor,
-            );
-
-        this.aiService =
-            new AIService(
-                defaultProvider,
-                this.providerFactory,
-                this.contextService,
-                this.toolRegistry,
-                this.promptBuilder,
-                this.agent,
-                this.agentProfiles,
-            );
-
-        this.aiController =
-            new AIController(
-                this.aiService,
-                this.providerFactory,
-                this.agentProfiles,
-            );
-
         this.integrationsController =
             new IntegrationsController(
                 this.microsoftOAuth,
+            );
+
+        const shouldIgnore =
+            (name: string) =>
+                this.ignoreService.shouldIgnore(name);
+
+        this.toolRegistry =
+            new ToolRegistry();
+
+        for (const tool of [
+            ...createFileTools(this.workspaceRoot, shouldIgnore),
+            ...createWordTools(this.microsoftGraph),
+        ]) {
+            this.toolRegistry.register(tool);
+        }
+
+        this.providerRegistry =
+            new ProviderRegistry();
+
+        this.agentProfiles =
+            new AgentProfiles();
+
+        this.sessionManager =
+            new SessionManager({
+                store: new SessionStore(
+                    path.join(this.workspaceRoot, ".justai", "sessions"),
+                ),
+                providers: this.providerRegistry,
+                tools: this.toolRegistry,
+                profiles: this.agentProfiles,
+                workspaceRoot: this.workspaceRoot,
+                shouldIgnore,
+                limits: budgetFromEnv(),
+                emit: event =>
+                    this.webSocketConnectionManager.broadcast(event),
+            });
+
+        this.agentController =
+            new AgentController(
+                this.sessionManager,
+                this.providerRegistry,
+                this.agentProfiles,
             );
     }
 
@@ -327,4 +245,21 @@ export class Container {
             .list()
             .map(tool => tool.name);
     }
+}
+
+/**
+ * JUSTAI_WORKSPACE задаёт папку проекта явно; иначе — корень репозитория JustAI
+ * (родитель папки server, если сервер запущен из неё).
+ */
+function resolveWorkspaceRoot(): string {
+    if (process.env.JUSTAI_WORKSPACE) {
+        return path.resolve(process.env.JUSTAI_WORKSPACE);
+    }
+
+    const currentDirectory =
+        process.cwd();
+
+    return path.basename(currentDirectory).toLowerCase() === "server"
+        ? path.resolve(currentDirectory, "..")
+        : currentDirectory;
 }

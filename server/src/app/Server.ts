@@ -5,7 +5,7 @@ import express, {
 import cors from 'cors';
 import http from 'node:http';
 
-import { createAIRouter } from '../modules/ai/index.js';
+import { createAgentRouter } from '../modules/agent/AgentRoutes.js';
 
 import { Container } from './Container.js';
 
@@ -84,14 +84,11 @@ export class Server {
 
     private routes(): void {
 
-        const aiRouter =
-            createAIRouter(
-                this.container.aiController,
-            );
-
         this.app.use(
-            '/api/ai',
-            aiRouter,
+            '/api/agent',
+            createAgentRouter(
+                this.container.agentController,
+            ),
         );
 
         const workspaceRouter =
@@ -151,13 +148,10 @@ export class Server {
 
     }
 
-    public start(
-        port: number,
-        host: string,
-    ): void {
-
-        const logger =
-            this.container.getLogger();
+    /**
+     * HTTP-сервер с WebSocket, без запуска (тесты слушают на случайном порту).
+     */
+    public createHttpServer(): http.Server {
 
         const httpServer =
             http.createServer(
@@ -171,6 +165,21 @@ export class Server {
                     request,
                 ),
         );
+
+        return httpServer;
+
+    }
+
+    public start(
+        port: number,
+        host: string,
+    ): void {
+
+        const logger =
+            this.container.getLogger();
+
+        const httpServer =
+            this.createHttpServer();
 
         httpServer.listen(
             port,

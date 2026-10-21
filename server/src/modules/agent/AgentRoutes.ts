@@ -1,0 +1,18 @@
+import { Router } from "express";
+
+import type { AgentController } from "./AgentController.js";
+
+export function createAgentRouter(controller: AgentController): Router {
+    const router = Router();
+
+    router.get("/providers", controller.listProviders);
+    router.get("/profiles", controller.listProfiles);
+
+    router.get("/sessions", controller.listSessions);
+    router.post("/sessions", controller.createSession);
+    router.get("/sessions/:id", controller.getSession);
+    router.post("/sessions/:id/messages", controller.sendMessage);
+    router.post("/sessions/:id/stop", controller.stopSession);
+
+    return router;
+}
