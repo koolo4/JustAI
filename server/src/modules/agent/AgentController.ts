@@ -1,6 +1,10 @@
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import { z } from "zod";
 
+import {
+    PERMISSION_MODES,
+    type PermissionMode,
+} from "@justai/shared";
 import type {
     AgentProfileListResponse,
     CreateSessionResponse,
@@ -18,6 +22,18 @@ const createSessionSchema = z.object({
     profile: z.string().min(1).optional(),
     provider: z.string().min(1).optional(),
     model: z.string().min(1).optional(),
+    mode: z.enum(PERMISSION_MODES as [PermissionMode, ...PermissionMode[]]).optional(),
+});
+
+const modeSchema = z.enum(PERMISSION_MODES as [PermissionMode, ...PermissionMode[]]);
+
+const updateSessionSchema = z.object({
+    mode: modeSchema,
+});
+
+const resolvePermissionSchema = z.object({
+    decision: z.enum(["allow", "allow_always", "deny"]),
+    note: z.string().max(2000).optional(),
 });
 
 const sendMessageSchema = z.object({
@@ -67,6 +83,24 @@ export class AgentController {
         const input = parse(sendMessageSchema, req.body);
         const session = await this.sessions.send(sessionId(req), input);
         res.status(202).json({ session });
+    });
+
+    public updateSession = handle(async (req, res) => {
+        const input = parse(updateSessionSchema, req.body);
+        const session = await this.sessions.setMode(sessionId(req), input.mode);
+        res.json({ session });
+    });
+
+    public resolvePermission = handle(async (req, res) => {
+        const input = parse(resolvePermissionSchema, req.body);
+        const requestId = req.params.requestId;
+
+        if (typeof requestId !== "string" || !requestId) {
+            throw new BadRequestError("Request id is required.");
+        }
+
+        await this.sessions.resolvePermission(sessionId(req), requestId, input.decision, input.note);
+        res.status(204).end();
     });
 
     public stopSession = handle(async (req, res) => {

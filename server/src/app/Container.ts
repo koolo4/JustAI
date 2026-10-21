@@ -29,6 +29,7 @@ import { createFileTools } from "../modules/agent/tools/fileTools.js";
 import { createSearchTools } from "../modules/agent/tools/searchTools.js";
 import { createShellTools } from "../modules/agent/tools/shellTools.js";
 import { ProcessManager } from "../infrastructure/process/ProcessManager.js";
+import { PermissionService } from "../modules/agent/permissions/PermissionService.js";
 
 import type { AgentEvent } from "@justai/shared";
 import { ToolRegistry } from "../modules/agent/tools/ToolRegistry.js";
@@ -235,6 +236,10 @@ export class Container {
                 workspaceRoot: this.workspaceRoot,
                 shouldIgnore,
                 limits: budgetFromEnv(),
+                permissions: new PermissionService({
+                    rulesFile: path.join(this.workspaceRoot, ".justai", "permissions.json"),
+                    emit: broadcast,
+                }),
                 emit: broadcast,
             });
 

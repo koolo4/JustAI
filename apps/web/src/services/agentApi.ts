@@ -4,7 +4,9 @@ import type {
     CreateSessionRequest,
     CreateSessionResponse,
     ProviderListResponse,
+    ResolvePermissionRequest,
     SendMessageRequest,
+    UpdateSessionRequest,
     SessionDetails,
     SessionListResponse,
     SessionSummary,
@@ -70,6 +72,35 @@ export async function sendMessage(id: string, body: SendMessageRequest): Promise
     );
 
     return response.session;
+}
+
+export async function updateSession(id: string, body: UpdateSessionRequest): Promise<SessionSummary> {
+    const response = await request<{ session: SessionSummary }>(
+        `/agent/sessions/${encodeURIComponent(id)}`,
+        { method: "PATCH", body: JSON.stringify(body) },
+    );
+
+    return response.session;
+}
+
+export async function resolvePermission(
+    id: string,
+    requestId: string,
+    body: ResolvePermissionRequest,
+): Promise<void> {
+    const response = await apiFetch(
+        `/agent/sessions/${encodeURIComponent(id)}/permissions/${encodeURIComponent(requestId)}`,
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+        },
+    );
+
+    if (!response.ok) {
+        const body = await response.json().catch(() => null) as Partial<ApiErrorBody> | null;
+        throw new Error(body?.error?.message ?? `${response.status} ${response.statusText}`);
+    }
 }
 
 export async function stopSession(id: string): Promise<SessionSummary> {

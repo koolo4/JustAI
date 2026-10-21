@@ -139,17 +139,35 @@ function defaultMockScript(request: ModelRequest): MockTurnScript {
     }
 
     const prompt = lastUserText(last);
-    const match = prompt.match(/^(?:прочитай|открой|read|open)\s+(?:файл\s+)?(\S+)/i);
+    const read = prompt.match(/^(?:прочитай|открой|read|open)\s+(?:файл\s+)?(\S+)/i);
 
-    if (match?.[1]) {
+    if (read?.[1]) {
         return {
-            text: `Читаю ${match[1]}.`,
-            toolCalls: [{ name: "read_file", input: { path: match[1] } }],
+            text: `Читаю ${read[1]}.`,
+            toolCalls: [{ name: "read_file", input: { path: read[1] } }],
+        };
+    }
+
+    const run = prompt.match(/^(?:запусти|выполни|run)\s+([\s\S]+)/i);
+
+    if (run?.[1]) {
+        return {
+            text: "Запускаю команду.",
+            toolCalls: [{ name: "run_command", input: { command: run[1].trim() } }],
+        };
+    }
+
+    const create = prompt.match(/^(?:создай|create)\s+(?:файл\s+)?(\S+)/i);
+
+    if (create?.[1]) {
+        return {
+            text: `Создаю ${create[1]}.`,
+            toolCalls: [{ name: "write_file", input: { path: create[1], content: "Created by the JustAI mock agent.\n" } }],
         };
     }
 
     return {
-        text: `Mock-провайдер (без API-ключа). Вы написали: ${prompt}\n\nПопробуйте: «прочитай AGENTS.md».`,
+        text: `Mock-провайдер (без API-ключа). Вы написали: ${prompt}\n\nПопробуйте: «прочитай AGENTS.md», «запусти npm --version», «создай файл tmp/demo.txt».`,
     };
 }
 

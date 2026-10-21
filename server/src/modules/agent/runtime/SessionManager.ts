@@ -9,6 +9,8 @@ import {
     type SendMessageRequest,
     type SessionDetails,
     type SessionStatus,
+    type PermissionDecision,
+    type PermissionMode,
     type SessionSummary,
     type ToolResultBlock,
     type ToolUseBlock,
@@ -17,6 +19,7 @@ import {
 import { BadRequestError } from "../../../core/errors/BadRequestError.js";
 import { ConflictError } from "../../../core/errors/ConflictError.js";
 import { NotFoundError } from "../../../core/errors/NotFoundError.js";
+import type { PermissionService } from "../permissions/PermissionService.js";
 import type { AgentProfiles } from "../profiles.js";
 import { projectTree, readProjectRules } from "../prompts/ProjectContext.js";
 import { buildSystemPrompt } from "../prompts/SystemPrompt.js";
@@ -34,6 +37,7 @@ export interface SessionManagerDeps {
     workspaceRoot: string;
     shouldIgnore: (name: string) => boolean;
     limits: BudgetLimits;
+    permissions: PermissionService;
     emit: (event: AgentEvent) => void;
 }
 
@@ -72,6 +76,7 @@ export class SessionManager {
             profile: profile.id,
             provider: provider.id,
             model: provider.model,
+            mode: request.mode ?? "ask",
             status: "idle",
             createdAt: now,
             updatedAt: now,
@@ -110,6 +115,7 @@ export class SessionManager {
         return {
             session: session.summary,
             messages: session.messages.map(publicMessage),
+            pendingPermissions: this.deps.permissions.pendingFor(id),
         };
     }
 
@@ -164,6 +170,32 @@ export class SessionManager {
         return session.summary;
     }
 
+    /**
+     * Меняет режим разрешений. Действует сразу, в том числе на работающий цикл.
+     */
+    public async setMode(id: string, mode: PermissionMode): Promise<SessionSummary> {
+        const session = await this.load(id);
+
+        session.summary.mode = mode;
+        session.summary.updatedAt = new Date().toISOString();
+        await this.deps.store.updateSummary(session.summary);
+
+        return session.summary;
+    }
+
+    public async resolvePermission(
+        id: string,
+        requestId: string,
+        decision: PermissionDecision,
+        note?: string,
+    ): Promise<void> {
+        await this.load(id);
+
+        if (!this.deps.permissions.resolve(id, requestId, decision, note)) {
+            throw new NotFoundError("This permission request is no longer pending.");
+        }
+    }
+
     public async stop(id: string): Promise<SessionSummary> {
         const session = await this.load(id);
         const run = this.running.get(id);
@@ -196,6 +228,7 @@ export class SessionManager {
                 limits: this.deps.limits,
                 signal: controller.signal,
                 emit: this.deps.emit,
+                authorizer: this.deps.permissions.forSession(summary.id, () => summary.mode),
                 onMessage: message => this.addMessage(session, message),
             });
 
@@ -267,7 +300,10 @@ export class SessionManager {
     /**
      * Сессия, записанная как running, но без живого цикла, — сервер перезапускали посреди работы.
      */
-    private reconcile(summary: SessionSummary): SessionSummary {
+    private reconcile(stored: SessionSummary): SessionSummary {
+        // Сессии, созданные до появления режимов разрешений.
+        const summary: SessionSummary = { ...stored, mode: stored.mode ?? "ask" };
+
         if (summary.status === "running" && !this.running.has(summary.id)) {
             return { ...summary, status: "stopped", lastError: "Interrupted: the server was restarted." };
         }

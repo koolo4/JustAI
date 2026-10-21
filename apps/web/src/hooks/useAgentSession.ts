@@ -5,6 +5,9 @@ import {
     type AgentEvent,
     type CreateSessionRequest,
     type Message,
+    type PermissionDecision,
+    type PermissionMode,
+    type PermissionRequest,
     type SessionSummary,
     type Usage,
 } from "@justai/shared";
@@ -12,14 +15,18 @@ import {
 import {
     createSession,
     fetchSession,
+    resolvePermission,
     sendMessage,
     stopSession,
+    updateSession,
 } from "../services/agentApi";
 import { socketBus } from "../services/socket";
 
 export interface ToolProgress {
     status: "running" | "done" | "error";
     preview?: string;
+    /** Живой вывод команды (хвост). */
+    output?: string;
 }
 
 export interface RunStats {
@@ -34,6 +41,7 @@ export interface AgentSessionState {
     streamingText: string;
     streamingThinking: string;
     tools: Record<string, ToolProgress>;
+    permissions: PermissionRequest[];
     run: RunStats | null;
     error: string;
 }
@@ -44,9 +52,12 @@ const INITIAL: AgentSessionState = {
     streamingText: "",
     streamingThinking: "",
     tools: {},
+    permissions: [],
     run: null,
     error: "",
 };
+
+const MAX_LIVE_OUTPUT = 20_000;
 
 export function useAgentSession() {
     const [state, setState] = useState<AgentSessionState>(INITIAL);
@@ -63,6 +74,7 @@ export function useAgentSession() {
             ...previous,
             session: details.session,
             messages: details.messages,
+            permissions: details.pendingPermissions,
             ...(details.session.status === "running"
                 ? {}
                 : { streamingText: "", streamingThinking: "" }),
@@ -97,6 +109,10 @@ export function useAgentSession() {
         });
     }, [reload]);
 
+    const fail = useCallback((error: unknown) => {
+        setState(previous => ({ ...previous, error: errorText(error) }));
+    }, []);
+
     const open = useCallback(async (id: string) => {
         sessionIdRef.current = id;
         setState({ ...INITIAL });
@@ -105,9 +121,9 @@ export function useAgentSession() {
             await reload(id);
         }
         catch (error) {
-            setState(previous => ({ ...previous, error: errorText(error) }));
+            fail(error);
         }
-    }, [reload]);
+    }, [reload, fail]);
 
     const reset = useCallback(() => {
         sessionIdRef.current = null;
@@ -126,6 +142,7 @@ export function useAgentSession() {
                     ...(options.profile ? { profile: options.profile } : {}),
                     ...(options.provider ? { provider: options.provider } : {}),
                     ...(options.model ? { model: options.model } : {}),
+                    ...(options.mode ? { mode: options.mode } : {}),
                 });
 
                 id = session.id;
@@ -143,9 +160,9 @@ export function useAgentSession() {
             setState(previous => ({ ...previous, session }));
         }
         catch (error) {
-            setState(previous => ({ ...previous, error: errorText(error) }));
+            fail(error);
         }
-    }, []);
+    }, [fail]);
 
     const stop = useCallback(async () => {
         const id = sessionIdRef.current;
@@ -159,11 +176,44 @@ export function useAgentSession() {
             await reload(id);
         }
         catch (error) {
-            setState(previous => ({ ...previous, error: errorText(error) }));
+            fail(error);
         }
-    }, [reload]);
+    }, [reload, fail]);
 
-    return { ...state, open, reset, send, stop };
+    const setMode = useCallback(async (mode: PermissionMode) => {
+        const id = sessionIdRef.current;
+
+        if (!id) {
+            return;
+        }
+
+        try {
+            const session = await updateSession(id, { mode });
+            setState(previous => ({ ...previous, session }));
+        }
+        catch (error) {
+            fail(error);
+        }
+    }, [fail]);
+
+    const answer = useCallback(async (requestId: string, decision: PermissionDecision, note?: string) => {
+        const id = sessionIdRef.current;
+
+        if (!id) {
+            return;
+        }
+
+        try {
+            await resolvePermission(id, requestId, note ? { decision, note } : { decision });
+        }
+        catch (error) {
+            fail(error);
+            // Запрос мог истечь — синхронизируемся с сервером.
+            await reload(id).catch(() => undefined);
+        }
+    }, [reload, fail]);
+
+    return { ...state, open, reset, send, stop, setMode, answer };
 }
 
 function applyEvent(state: AgentSessionState, event: AgentEvent): AgentSessionState {
@@ -191,19 +241,40 @@ function applyEvent(state: AgentSessionState, event: AgentEvent): AgentSessionSt
         case "tool.started":
             return { ...state, tools: { ...state.tools, [event.toolUseId]: { status: "running" } } };
 
-        case "tool.finished":
+        case "tool.progress": {
+            const current = state.tools[event.toolUseId] ?? { status: "running" as const };
+            const output = ((current.output ?? "") + event.chunk).slice(-MAX_LIVE_OUTPUT);
+
+            return { ...state, tools: { ...state.tools, [event.toolUseId]: { ...current, output } } };
+        }
+
+        case "tool.finished": {
+            const current = state.tools[event.toolUseId];
+
             return {
                 ...state,
                 tools: {
                     ...state.tools,
-                    [event.toolUseId]: { status: event.isError ? "error" : "done", preview: event.preview },
+                    [event.toolUseId]: {
+                        ...current,
+                        status: event.isError ? "error" : "done",
+                        preview: event.preview,
+                    },
                 },
             };
+        }
 
-        case "tool.progress":
         case "file.changed":
             // Дифф уже есть в результате инструмента; дерево и редактор обновляются по FILE_* событиям.
             return state;
+
+        case "permission.request":
+            return state.permissions.some(item => item.requestId === event.request.requestId)
+                ? state
+                : { ...state, permissions: [...state.permissions, event.request] };
+
+        case "permission.resolved":
+            return { ...state, permissions: state.permissions.filter(item => item.requestId !== event.requestId) };
 
         case "budget.updated":
             return { ...state, run: { steps: event.steps, usage: event.usage } };

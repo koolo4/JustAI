@@ -11,6 +11,8 @@ export function createAgentRouter(controller: AgentController): Router {
     router.get("/sessions", controller.listSessions);
     router.post("/sessions", controller.createSession);
     router.get("/sessions/:id", controller.getSession);
+    router.patch("/sessions/:id", controller.updateSession);
+    router.post("/sessions/:id/permissions/:requestId", controller.resolvePermission);
     router.post("/sessions/:id/messages", controller.sendMessage);
     router.post("/sessions/:id/stop", controller.stopSession);
 

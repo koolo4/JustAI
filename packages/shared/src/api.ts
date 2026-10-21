@@ -1,4 +1,5 @@
 import type { Message } from "./messages.js";
+import type { PermissionDecision, PermissionMode, PermissionRequest } from "./permissions.js";
 import type { SessionSummary } from "./sessions.js";
 
 /** REST API агента (MASTER_PLAN, раздел 5.5). */
@@ -7,6 +8,17 @@ export interface CreateSessionRequest {
     profile?: string;
     provider?: string;
     model?: string;
+    mode?: PermissionMode;
+}
+
+export interface UpdateSessionRequest {
+    mode: PermissionMode;
+}
+
+export interface ResolvePermissionRequest {
+    decision: PermissionDecision;
+    /** Пояснение для агента при отказе. */
+    note?: string;
 }
 
 export interface CreateSessionResponse {
@@ -22,6 +34,7 @@ export interface SendMessageRequest {
 export interface SessionDetails {
     session: SessionSummary;
     messages: Message[];
+    pendingPermissions: PermissionRequest[];
 }
 
 export interface SessionListResponse {

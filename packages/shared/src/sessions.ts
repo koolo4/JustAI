@@ -1,4 +1,5 @@
 import type { Usage } from "./messages.js";
+import type { PermissionMode } from "./permissions.js";
 
 export type SessionStatus =
     | "idle"
@@ -13,6 +14,7 @@ export interface SessionSummary {
     profile: string;
     provider: string;
     model: string;
+    mode: PermissionMode;
     status: SessionStatus;
     createdAt: string;
     updatedAt: string;

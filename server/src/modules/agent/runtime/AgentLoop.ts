@@ -18,6 +18,7 @@ import {
     type ModelProvider,
     type ModelTurn,
 } from "../providers/ModelProvider.js";
+import type { Authorizer } from "../permissions/PermissionService.js";
 import { ToolError, type Tool } from "../tools/Tool.js";
 import { toToolSpec } from "../tools/ToolRegistry.js";
 import { Budget, type BudgetLimits } from "./Budget.js";
@@ -40,6 +41,8 @@ export interface AgentLoopOptions {
     limits: BudgetLimits;
     signal: AbortSignal;
     emit(event: AgentEvent): void;
+    /** Проверка разрешений перед вызовом инструмента. Без него всё разрешено (тесты). */
+    authorizer?: Authorizer;
     /** Сохранить новое сообщение (вызывается для каждого сообщения по порядку). */
     onMessage(message: Message): Promise<void>;
 }
@@ -256,6 +259,20 @@ export class AgentLoop {
                 use.id,
                 `Invalid input for '${use.name}':\n${z.prettifyError(parsed.error)}`,
             );
+        }
+
+        if (this.options.authorizer) {
+            const decision = await this.options.authorizer.authorize({
+                sessionId,
+                toolUseId: use.id,
+                tool,
+                input: parsed.data,
+                signal,
+            });
+
+            if (!decision.allowed) {
+                return errorResult(use.id, decision.message);
+            }
         }
 
         this.options.emit({

@@ -4,6 +4,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type {
     AgentProfileInfo,
     Message,
+    PermissionDecision,
+    PermissionMode,
+    PermissionRequest,
     ProviderInfo,
     SessionSummary,
     ToolOutput,
@@ -25,6 +28,7 @@ export function AgentChat() {
     const [sessions, setSessions] = useState<SessionSummary[]>([]);
     const [provider, setProvider] = useState("");
     const [profile, setProfile] = useState("coder");
+    const [mode, setMode] = useState<PermissionMode>("ask");
     const [prompt, setPrompt] = useState("");
     const [loadError, setLoadError] = useState("");
 
@@ -80,6 +84,7 @@ export function AgentChat() {
         await agent.send(text, {
             profile,
             provider,
+            mode,
             ...(activeFile ? { activeFile } : {}),
         });
     }
@@ -143,6 +148,23 @@ export function AgentChat() {
                     </label>
 
                     <label>
+                        <span className="muted">Permissions</span>
+                        <select
+                            value={agent.session?.mode ?? mode}
+                            onChange={event => {
+                                const next = event.target.value as PermissionMode;
+                                setMode(next);
+                                void agent.setMode(next);
+                            }}
+                            title={MODE_HINTS[agent.session?.mode ?? mode]}
+                        >
+                            <option value="ask">Ask every change</option>
+                            <option value="auto-edit">Auto: edits + safe commands</option>
+                            <option value="full-auto">Full auto (asks for dangerous)</option>
+                        </select>
+                    </label>
+
+                    <label>
                         <span className="muted">History</span>
                         <select
                             value={agent.session?.id ?? ""}
@@ -191,7 +213,15 @@ export function AgentChat() {
                     />
                 ))}
 
-                {running && (
+                {agent.permissions.map(request => (
+                    <PermissionCard
+                        key={request.requestId}
+                        request={request}
+                        onAnswer={(decision, note) => void agent.answer(request.requestId, decision, note)}
+                    />
+                ))}
+
+                {running && agent.permissions.length === 0 && (
                     <div className="message assistant streaming">
                         <div className="role">JustAI</div>
                         {agent.streamingThinking && (
@@ -316,16 +346,63 @@ function ToolCard({
         ? (result.isError ? "error" : "done")
         : progress?.status ?? "running";
 
+    const live = !result && progress?.output;
+
     return (
-        <details className={`tool-card ${status}`}>
+        <details className={`tool-card ${status}`} open={Boolean(live)}>
             <summary>
                 <span className="tool-status">{status === "running" ? "…" : status === "error" ? "✕" : "✓"}</span>
                 <strong>{use.name}</strong>
                 <span className="tool-input">{inputSummary(use.input)}</span>
             </summary>
             <pre className="tool-detail">{JSON.stringify(use.input, null, 2)}</pre>
+            {live && <pre className="tool-detail">{progress.output}</pre>}
             {result && <pre className="tool-detail">{outputText(result.content)}</pre>}
         </details>
+    );
+}
+
+const MODE_HINTS: Record<PermissionMode, string> = {
+    "ask": "The agent asks before changing files, running commands or using external services.",
+    "auto-edit": "File edits and known safe commands (tests, builds, git status) run without asking.",
+    "full-auto": "Everything runs without asking, except potentially destructive commands and external services.",
+};
+
+function PermissionCard({
+    request,
+    onAnswer,
+}: {
+    request: PermissionRequest;
+    onAnswer: (decision: PermissionDecision, note?: string) => void;
+}) {
+    const [note, setNote] = useState("");
+
+    return (
+        <div className={`permission-card${request.dangerous ? " dangerous" : ""}`}>
+            <div className="permission-title">
+                <strong>{request.dangerous ? "⚠ Confirm a potentially destructive action" : "Allow this action?"}</strong>
+                <span className="muted">{request.tool}</span>
+            </div>
+            <pre className="permission-summary">{request.summary}</pre>
+            <div className="muted">{request.reason}</div>
+            <input
+                className="permission-note"
+                value={note}
+                onChange={event => setNote(event.target.value)}
+                placeholder="Optional note for the agent if you deny"
+            />
+            <div className="permission-actions">
+                <button onClick={() => onAnswer("allow")}>Allow</button>
+                {!request.dangerous && (
+                    <button className="secondary-button" onClick={() => onAnswer("allow_always")}>
+                        Always allow
+                    </button>
+                )}
+                <button className="deny-button" onClick={() => onAnswer("deny", note.trim() || undefined)}>
+                    Deny
+                </button>
+            </div>
+        </div>
     );
 }
 

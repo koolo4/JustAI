@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentEvent } from "@justai/shared";
 
 import { ConflictError } from "../../../src/core/errors/ConflictError.js";
+import { PermissionService } from "../../../src/modules/agent/permissions/PermissionService.js";
 import { AgentProfiles } from "../../../src/modules/agent/profiles.js";
 import { ProviderRegistry } from "../../../src/modules/agent/providers/ProviderRegistry.js";
 import { createMessage } from "../../../src/modules/agent/runtime/AgentLoop.js";
@@ -45,6 +46,10 @@ describe("SessionManager", () => {
             workspaceRoot: workspace.root,
             shouldIgnore: name => name === ".justai",
             limits: DEFAULT_BUDGET,
+            permissions: new PermissionService({
+                rulesFile: path.join(workspace.root, ".justai", "permissions.json"),
+                emit: event => events.push(event),
+            }),
             emit: event => events.push(event),
         });
     }

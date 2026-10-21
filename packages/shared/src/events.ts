@@ -1,4 +1,5 @@
 import type { Message, Usage } from "./messages.js";
+import type { PermissionDecision, PermissionRequest } from "./permissions.js";
 import type { SessionStatus } from "./sessions.js";
 
 /**
@@ -14,7 +15,9 @@ export type AgentEvent =
     | { type: "tool.finished"; sessionId: string; toolUseId: string; isError: boolean; preview: string }
     | { type: "budget.updated"; sessionId: string; usage: Usage; steps: number }
     /** Агент изменил файл. diff — unified diff. */
-    | { type: "file.changed"; sessionId: string; path: string; diff: string };
+    | { type: "file.changed"; sessionId: string; path: string; diff: string }
+    | { type: "permission.request"; sessionId: string; request: PermissionRequest }
+    | { type: "permission.resolved"; sessionId: string; requestId: string; decision: PermissionDecision };
 
 export type AgentEventType = AgentEvent["type"];
 

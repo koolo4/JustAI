@@ -319,6 +319,75 @@ button {
     border: 1px dashed #303842;
 }
 
+.permission-card {
+    border: 1px solid #3b5bdb;
+    background: #141c2e;
+    border-radius: 8px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.permission-card.dangerous {
+    border-color: #e03131;
+    background: #2a1416;
+}
+
+.permission-title {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.permission-summary {
+    margin: 0;
+    padding: 6px 8px;
+    background: #0c0f12;
+    border-radius: 6px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 12px;
+}
+
+.permission-note {
+    background: #0c0f12;
+    color: #e8edf2;
+    border: 1px solid #303842;
+    border-radius: 6px;
+    padding: 6px 8px;
+    font: inherit;
+    font-size: 12px;
+}
+
+.permission-actions {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+}
+
+.permission-actions button {
+    padding: 6px 12px;
+    border: none;
+    color: white;
+    background: #2563eb;
+}
+
+.permission-actions .secondary-button {
+    background: #1c232b;
+    border: 1px solid #39434e;
+}
+
+.permission-actions .deny-button {
+    background: #3a1d20;
+    border: 1px solid #7a2a30;
+}
+
+.ai-selects {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .run-stats {
     font-size: 11px;
 }
