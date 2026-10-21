@@ -12,7 +12,9 @@ export type AgentEvent =
     | { type: "tool.started"; sessionId: string; toolUseId: string; name: string; input: unknown }
     | { type: "tool.progress"; sessionId: string; toolUseId: string; chunk: string }
     | { type: "tool.finished"; sessionId: string; toolUseId: string; isError: boolean; preview: string }
-    | { type: "budget.updated"; sessionId: string; usage: Usage; steps: number };
+    | { type: "budget.updated"; sessionId: string; usage: Usage; steps: number }
+    /** Агент изменил файл. diff — unified diff. */
+    | { type: "file.changed"; sessionId: string; path: string; diff: string };
 
 export type AgentEventType = AgentEvent["type"];
 
@@ -25,5 +27,5 @@ export function isAgentEvent(value: unknown): value is AgentEvent {
 
     return typeof record.type === "string" &&
         typeof record.sessionId === "string" &&
-        /^(session|assistant|message|tool|budget)\./.test(record.type);
+        /^(session|assistant|message|tool|budget|file|todo|permission)\./.test(record.type);
 }

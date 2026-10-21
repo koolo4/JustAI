@@ -1,8 +1,12 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import type { AgentEvent } from "@justai/shared";
+
+import { EventBus, FileCreatedEvent, FileSavedEvent } from "../../../src/core/events/index.js";
+import { AgentFileSystem } from "../../../src/modules/agent/tools/AgentFileSystem.js";
 import { createFileTools } from "../../../src/modules/agent/tools/fileTools.js";
 import { ToolError, type Tool, type ToolContext } from "../../../src/modules/agent/tools/Tool.js";
 import { createTempWorkspace, type TempWorkspace } from "../../helpers/tempWorkspace.js";
@@ -10,52 +14,128 @@ import { createTempWorkspace, type TempWorkspace } from "../../helpers/tempWorks
 describe("file tools", () => {
     let workspace: TempWorkspace;
     let tools: Map<string, Tool>;
-    const context = { signal: new AbortController().signal, emit: () => undefined } as unknown as ToolContext;
+    let events: AgentEvent[];
+    let busEvents: string[];
 
-    const run = (name: string, input: unknown) => {
+    const context = (sessionId = "s1") => ({
+        sessionId,
+        signal: new AbortController().signal,
+        emit: () => undefined,
+    }) as unknown as ToolContext;
+
+    const run = (name: string, input: unknown, sessionId = "s1") => {
         const tool = tools.get(name)!;
-        return tool.run(tool.inputSchema.parse(input), context);
+        return tool.run(tool.inputSchema.parse(input), context(sessionId));
     };
+
+    const disk = (file: string) => readFile(path.join(workspace.root, file), "utf8");
 
     beforeEach(async () => {
         workspace = await createTempWorkspace();
         await workspace.write("src/a.ts", "line1\r\nline2\r\nline3\r\n");
+        await workspace.write("bom.md", "﻿# Title\n");
         await workspace.write("node_modules/x/index.js", "");
-        tools = new Map(createFileTools(workspace.root, name => name === "node_modules").map(tool => [tool.name, tool]));
+
+        events = [];
+        busEvents = [];
+
+        const bus = new EventBus();
+        bus.subscribe(FileSavedEvent, { handle: async event => { busEvents.push(`saved:${event.path}`); } });
+        bus.subscribe(FileCreatedEvent, { handle: async event => { busEvents.push(`created:${event.path}`); } });
+
+        const files = new AgentFileSystem(workspace.root, bus, event => events.push(event));
+        tools = new Map(createFileTools(files, name => name === "node_modules").map(tool => [tool.name, tool]));
     });
 
     afterEach(async () => {
         await workspace.dispose();
     });
 
-    it("reads files with line numbers and paging", async () => {
+    it("reads files with line numbers and paging, without BOM", async () => {
         expect(await run("read_file", { path: "src/a.ts", offset: 2, limit: 1 }))
             .toBe("2\tline2\n\n[2 more lines; continue with offset=3]");
+        expect(await run("read_file", { path: "bom.md" })).toBe("1\t# Title\n2\t");
     });
 
     it("lists directories without ignored entries", async () => {
-        expect(await run("list_dir", {})).toBe("src/");
+        expect(await run("list_dir", {})).toBe("src/\nbom.md");
     });
 
-    it("edits a unique fragment and refuses ambiguous edits", async () => {
-        await run("edit_file", { path: "src/a.ts", old_string: "line2", new_string: "LINE2" });
-        expect(await readFile(path.join(workspace.root, "src/a.ts"), "utf8")).toBe("line1\r\nLINE2\r\nline3\r\n");
+    it("refuses to edit or overwrite a file that was not read in this session", async () => {
+        await expect(run("edit_file", { path: "src/a.ts", edits: [{ old_string: "line2", new_string: "x" }] }))
+            .rejects.toThrow("Read src/a.ts with read_file");
+        await expect(run("write_file", { path: "src/a.ts", content: "x" }))
+            .rejects.toThrow("Read src/a.ts with read_file");
 
-        await expect(run("edit_file", { path: "src/a.ts", old_string: "line", new_string: "x" }))
-            .rejects.toThrow(/occurs 2 times/);
-
-        await run("edit_file", { path: "src/a.ts", old_string: "line", new_string: "row", replace_all: true });
-        expect(await readFile(path.join(workspace.root, "src/a.ts"), "utf8")).toBe("row1\r\nLINE2\r\nrow3\r\n");
+        // Чтение в другой сессии не считается.
+        await run("read_file", { path: "src/a.ts" }, "other");
+        await expect(run("edit_file", { path: "src/a.ts", edits: [{ old_string: "line2", new_string: "x" }] }))
+            .rejects.toBeInstanceOf(ToolError);
     });
 
-    it("keeps $ patterns in replacement text literal", async () => {
-        await run("edit_file", { path: "src/a.ts", old_string: "line1", new_string: "cost $& $1" });
-        expect(await readFile(path.join(workspace.root, "src/a.ts"), "utf8")).toContain("cost $& $1");
+    it("refuses to edit a file the user changed after it was read", async () => {
+        await run("read_file", { path: "src/a.ts" });
+        await writeFile(path.join(workspace.root, "src/a.ts"), "user change\n", "utf8");
+
+        await expect(run("edit_file", { path: "src/a.ts", edits: [{ old_string: "user", new_string: "x" }] }))
+            .rejects.toThrow("was modified since you last read it");
+        expect(await disk("src/a.ts")).toBe("user change\n");
     });
 
-    it("creates new files in new folders", async () => {
+    it("applies several edits atomically and preserves CRLF", async () => {
+        await run("read_file", { path: "src/a.ts" });
+
+        await expect(run("edit_file", {
+            path: "src/a.ts",
+            edits: [
+                { old_string: "line1", new_string: "first" },
+                { old_string: "missing", new_string: "x" },
+            ],
+        })).rejects.toThrow(/Edit #2.*Nothing was written/);
+        expect(await disk("src/a.ts")).toBe("line1\r\nline2\r\nline3\r\n");
+
+        const result = await run("edit_file", {
+            path: "src/a.ts",
+            edits: [
+                { old_string: "line1\nline2", new_string: "first\nsecond" },
+                { old_string: "line3", new_string: "third" },
+            ],
+        });
+
+        expect(await disk("src/a.ts")).toBe("first\r\nsecond\r\nthird\r\n");
+        expect(result).toContain("-line1");
+        expect(result).toContain("+first");
+
+        // После своей записи агент может править дальше без повторного чтения.
+        await run("edit_file", { path: "src/a.ts", edits: [{ old_string: "third", new_string: "3" }] });
+        expect(await disk("src/a.ts")).toBe("first\r\nsecond\r\n3\r\n");
+    });
+
+    it("refuses ambiguous edits unless replace_all, keeps $ literal", async () => {
+        await run("read_file", { path: "src/a.ts" });
+
+        await expect(run("edit_file", { path: "src/a.ts", edits: [{ old_string: "line", new_string: "x" }] }))
+            .rejects.toThrow(/occurs 3 times/);
+
+        await run("edit_file", { path: "src/a.ts", edits: [{ old_string: "line", new_string: "$&-", replace_all: true }] });
+        expect(await disk("src/a.ts")).toBe("$&-1\r\n$&-2\r\n$&-3\r\n");
+    });
+
+    it("preserves BOM on overwrite", async () => {
+        await run("read_file", { path: "bom.md" });
+        await run("write_file", { path: "bom.md", content: "# New\n" });
+
+        expect(await disk("bom.md")).toBe("﻿# New\n");
+    });
+
+    it("creates new files without a prior read and publishes events", async () => {
         expect(await run("write_file", { path: "docs/new/readme.md", content: "# hi" })).toContain("Created");
-        expect(await readFile(path.join(workspace.root, "docs/new/readme.md"), "utf8")).toBe("# hi");
+        expect(await disk("docs/new/readme.md")).toBe("# hi");
+
+        expect(busEvents).toEqual(["created:docs/new/readme.md"]);
+        expect(events).toEqual([
+            expect.objectContaining({ type: "file.changed", sessionId: "s1", path: "docs/new/readme.md", diff: expect.stringContaining("+# hi") }),
+        ]);
     });
 
     it("turns path and fs problems into ToolErrors", async () => {
@@ -63,5 +143,6 @@ describe("file tools", () => {
         await expect(run("write_file", { path: ".justai/x", content: "" })).rejects.toBeInstanceOf(ToolError);
         await expect(run("read_file", { path: "missing.ts" })).rejects.toThrow("does not exist");
         await expect(run("read_file", { path: "src" })).rejects.toThrow("is a directory");
+        await expect(run("write_file", { path: "src", content: "" })).rejects.toThrow("is a directory");
     });
 });

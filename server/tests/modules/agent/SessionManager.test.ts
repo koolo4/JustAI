@@ -11,6 +11,8 @@ import { createMessage } from "../../../src/modules/agent/runtime/AgentLoop.js";
 import { DEFAULT_BUDGET } from "../../../src/modules/agent/runtime/Budget.js";
 import { repairHistory, SessionManager } from "../../../src/modules/agent/runtime/SessionManager.js";
 import { SessionStore } from "../../../src/modules/agent/runtime/SessionStore.js";
+import { EventBus } from "../../../src/core/events/index.js";
+import { AgentFileSystem } from "../../../src/modules/agent/tools/AgentFileSystem.js";
 import { createFileTools } from "../../../src/modules/agent/tools/fileTools.js";
 import { ToolRegistry } from "../../../src/modules/agent/tools/ToolRegistry.js";
 import { createTempWorkspace, type TempWorkspace } from "../../helpers/tempWorkspace.js";
@@ -32,7 +34,8 @@ describe("SessionManager", () => {
 
     function manager(): SessionManager {
         const tools = new ToolRegistry();
-        createFileTools(workspace.root, () => false).forEach(tool => tools.register(tool));
+        const files = new AgentFileSystem(workspace.root, new EventBus(), event => events.push(event));
+        createFileTools(files, () => false).forEach(tool => tools.register(tool));
 
         return new SessionManager({
             store: new SessionStore(path.join(workspace.root, ".justai", "sessions")),

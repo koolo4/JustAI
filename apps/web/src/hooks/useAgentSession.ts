@@ -201,6 +201,8 @@ function applyEvent(state: AgentSessionState, event: AgentEvent): AgentSessionSt
             };
 
         case "tool.progress":
+        case "file.changed":
+            // Дифф уже есть в результате инструмента; дерево и редактор обновляются по FILE_* событиям.
             return state;
 
         case "budget.updated":

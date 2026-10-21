@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 interface Props {
 
@@ -27,11 +27,34 @@ export function FileViewer({
 
     const [saving, setSaving] = useState(false);
 
+    // Файл изменился на диске, пока в редакторе были несохранённые правки.
+    const [conflict, setConflict] = useState(false);
+
+    const baseline = useRef("");
+
+    const currentPath = useRef("");
+
     useEffect(() => {
 
-        setValue(content);
+        const switchedFile = currentPath.current !== path;
+        const dirty = value !== baseline.current;
 
-    }, [content]);
+        currentPath.current = path;
+        baseline.current = content;
+
+        if (switchedFile || !dirty) {
+
+            setValue(content);
+            setConflict(false);
+
+        }
+        else if (content !== value) {
+
+            setConflict(true);
+
+        }
+
+    }, [content, path]);
 
     async function handleSave() {
 
@@ -53,6 +76,8 @@ export function FileViewer({
 
             );
 
+            setConflict(false);
+
         }
 
         finally {
@@ -62,6 +87,15 @@ export function FileViewer({
         }
 
     }
+
+    function reloadFromDisk() {
+
+        setValue(baseline.current);
+        setConflict(false);
+
+    }
+
+    const dirty = Boolean(path) && value !== baseline.current;
 
     return (
 
@@ -97,7 +131,7 @@ export function FileViewer({
 
                 <h3>
 
-                    {path || "Select file"}
+                    {path || "Select file"}{dirty ? " •" : ""}
 
                 </h3>
 
@@ -122,6 +156,22 @@ export function FileViewer({
                 </button>
 
             </div>
+
+            {conflict && (
+
+                <div className="notice" style={{ marginTop: 0, marginBottom: 8 }}>
+
+                    The file was changed on disk (possibly by the agent) while you had unsaved edits.{" "}
+
+                    <button className="secondary-button" onClick={reloadFromDisk}>
+
+                        Load disk version
+
+                    </button>
+
+                </div>
+
+            )}
 
             <textarea
 

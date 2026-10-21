@@ -58,37 +58,7 @@ export function App() {
 
     ] = useState("");
 
-    const [
-
-        events,
-
-        setEvents,
-
-    ] = useState<WorkspaceEvent[]>([]);
-
-    const socketStatus =
-
-        useWorkspaceSocket(
-
-            event => {
-
-                setEvents(
-
-                    previous => [
-
-                        event,
-
-                        ...previous,
-
-                    ].slice(0, 50),
-
-                );
-
-            },
-
-        );
-
-    useEffect(() => {
+    function refreshTree() {
 
         fetchWorkspaceTree()
 
@@ -101,6 +71,49 @@ export function App() {
             })
 
             .catch(console.error);
+
+    }
+
+    // Изменения файлов (в том числе агентом) приходят по WebSocket.
+    function handleWorkspaceEvent(event: WorkspaceEvent) {
+
+        if (event.type !== 'FILE_SAVED') {
+
+            refreshTree();
+
+        }
+
+        const changed = event.path ?? event.newPath;
+
+        if (selectedPath && changed === selectedPath) {
+
+            fetchWorkspaceFile(selectedPath)
+
+                .then((json: { content: string }) => {
+
+                    setFileContent(json.content);
+
+                    setActiveContent(json.content);
+
+                })
+
+                .catch(console.error);
+
+        }
+
+    }
+
+    const socketStatus =
+
+        useWorkspaceSocket(
+
+            handleWorkspaceEvent,
+
+        );
+
+    useEffect(() => {
+
+        refreshTree();
 
     }, []);
 

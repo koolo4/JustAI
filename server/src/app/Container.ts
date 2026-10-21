@@ -24,7 +24,10 @@ import { ProviderRegistry } from "../modules/agent/providers/ProviderRegistry.js
 import { budgetFromEnv } from "../modules/agent/runtime/Budget.js";
 import { SessionManager } from "../modules/agent/runtime/SessionManager.js";
 import { SessionStore } from "../modules/agent/runtime/SessionStore.js";
+import { AgentFileSystem } from "../modules/agent/tools/AgentFileSystem.js";
 import { createFileTools } from "../modules/agent/tools/fileTools.js";
+
+import type { AgentEvent } from "@justai/shared";
 import { ToolRegistry } from "../modules/agent/tools/ToolRegistry.js";
 
 import {
@@ -185,11 +188,22 @@ export class Container {
             (name: string) =>
                 this.ignoreService.shouldIgnore(name);
 
+        const broadcast =
+            (event: AgentEvent) =>
+                this.webSocketConnectionManager.broadcast(event);
+
+        const agentFiles =
+            new AgentFileSystem(
+                this.workspaceRoot,
+                this.eventBus,
+                broadcast,
+            );
+
         this.toolRegistry =
             new ToolRegistry();
 
         for (const tool of [
-            ...createFileTools(this.workspaceRoot, shouldIgnore),
+            ...createFileTools(agentFiles, shouldIgnore),
             ...createWordTools(this.microsoftGraph),
         ]) {
             this.toolRegistry.register(tool);
@@ -212,8 +226,7 @@ export class Container {
                 workspaceRoot: this.workspaceRoot,
                 shouldIgnore,
                 limits: budgetFromEnv(),
-                emit: event =>
-                    this.webSocketConnectionManager.broadcast(event),
+                emit: broadcast,
             });
 
         this.agentController =

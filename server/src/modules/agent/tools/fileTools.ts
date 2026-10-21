@@ -1,40 +1,25 @@
 import { promises as fs } from "node:fs";
-import path from "node:path";
 
 import { z } from "zod";
 
-import { ForbiddenError } from "../../../core/errors/ForbiddenError.js";
-import { resolveSafePath, type PathAccess } from "../../../infrastructure/filesystem/safePath.js";
+import { fsErrorMessage, type AgentFileSystem } from "./AgentFileSystem.js";
 import { defineTool, ToolError, type Tool } from "./Tool.js";
 
 const DEFAULT_READ_LIMIT = 2000;
 
 /**
- * Файловые инструменты агента. Все пути проходят через resolveSafePath.
- * Полная версия (запись через WorkspaceService, проверка «прочитан и не изменён») — задача P2-01.
+ * Файловые инструменты агента поверх AgentFileSystem.
  */
 export function createFileTools(
-    workspaceRoot: string,
+    files: AgentFileSystem,
     shouldIgnore: (name: string) => boolean,
 ): Tool[] {
-    const resolve = async (target: string, access: PathAccess) => {
-        try {
-            return await resolveSafePath(workspaceRoot, target, access);
-        }
-        catch (error) {
-            if (error instanceof ForbiddenError) {
-                throw new ToolError(`${error.message} (path: ${target})`);
-            }
-            throw error;
-        }
-    };
-
     const readFile = defineTool({
         name: "read_file",
         description: [
-            "Reads a UTF-8 text file from the workspace. Returns lines prefixed with their 1-based line numbers and a tab.",
+            "Reads a UTF-8 text file from the workspace. Returns lines prefixed with their 1-based line number and a tab.",
             `Reads up to ${DEFAULT_READ_LIMIT} lines by default; use offset/limit for large files.`,
-            "Read a file before editing it.",
+            "You must read a file before editing or overwriting it.",
         ].join(" "),
         inputSchema: z.object({
             path: z.string().describe("Workspace-relative file path."),
@@ -42,11 +27,9 @@ export function createFileTools(
             limit: z.number().int().min(1).optional().describe("Number of lines to read."),
         }),
         kind: "read",
-        run: async ({ path: file, offset = 1, limit = DEFAULT_READ_LIMIT }) => {
-            const absolute = await resolve(file, "read");
-            // BOM не показываем модели: иначе он попадёт в old_string при правке.
-            const content = (await readText(absolute, file)).replace(/^﻿/, "");
-            const lines = content.split(/\r?\n/);
+        run: async ({ path: file, offset = 1, limit = DEFAULT_READ_LIMIT }, context) => {
+            const { text } = await files.read(context.sessionId, file);
+            const lines = text.split("\n");
             const slice = lines.slice(offset - 1, offset - 1 + limit);
 
             if (slice.length === 0) {
@@ -73,7 +56,7 @@ export function createFileTools(
         }),
         kind: "read",
         run: async ({ path: directory }) => {
-            const absolute = await resolve(directory, "read");
+            const absolute = await files.resolve(directory, "read");
 
             let entries;
 
@@ -85,7 +68,7 @@ export function createFileTools(
             }
 
             const lines = entries
-                .filter(entry => !shouldIgnore(entry.name))
+                .filter(entry => !shouldIgnore(entry.name) && entry.name !== ".justai")
                 .sort((a, b) =>
                     a.isDirectory() !== b.isDirectory()
                         ? (a.isDirectory() ? -1 : 1)
@@ -100,94 +83,73 @@ export function createFileTools(
     const editFile = defineTool({
         name: "edit_file",
         description: [
-            "Replaces an exact text fragment in a workspace file.",
-            "old_string must match the file exactly (including indentation) and be unique unless replace_all is true.",
-            "Do not include the line-number prefixes from read_file in old_string.",
+            "Applies one or more exact text replacements to a workspace file. Edits are applied in order and atomically: if any edit fails, nothing is written.",
+            "Each old_string must match the current text exactly (including indentation) and be unique unless replace_all is true.",
+            "Do not include the line-number prefixes from read_file. Line endings and encoding of the file are preserved automatically.",
+            "The file must have been read with read_file first.",
         ].join(" "),
         inputSchema: z.object({
             path: z.string().describe("Workspace-relative file path."),
-            old_string: z.string().min(1).describe("Exact text to replace."),
-            new_string: z.string().describe("Replacement text."),
-            replace_all: z.boolean().default(false).describe("Replace every occurrence."),
+            edits: z.array(z.object({
+                old_string: z.string().min(1).describe("Exact text to replace."),
+                new_string: z.string().describe("Replacement text."),
+                replace_all: z.boolean().default(false).describe("Replace every occurrence."),
+            })).min(1),
         }),
         kind: "write",
-        run: async ({ path: file, old_string, new_string, replace_all }) => {
-            if (old_string === new_string) {
-                throw new ToolError("old_string and new_string are identical; nothing to change.");
-            }
+        run: async ({ path: file, edits }, context) => {
+            const { state } = await files.readForEdit(context.sessionId, file);
+            let text = state.text;
+            let replacements = 0;
 
-            const absolute = await resolve(file, "write");
-            const current = await readText(absolute, file);
-            const occurrences = current.split(old_string).length - 1;
+            edits.forEach((edit, index) => {
+                const oldText = edit.old_string.replace(/\r\n/g, "\n");
+                const newText = edit.new_string.replace(/\r\n/g, "\n");
+                const label = edits.length > 1 ? `Edit #${index + 1}: ` : "";
 
-            if (occurrences === 0) {
-                throw new ToolError(`old_string was not found in ${file}. Read the file again and copy the text exactly.`);
-            }
+                if (oldText === newText) {
+                    throw new ToolError(`${label}old_string and new_string are identical.`);
+                }
 
-            if (occurrences > 1 && !replace_all) {
-                throw new ToolError(`old_string occurs ${occurrences} times in ${file}. Add surrounding context to make it unique, or set replace_all.`);
-            }
+                const occurrences = text.split(oldText).length - 1;
 
-            const updated = replace_all
-                ? current.split(old_string).join(new_string)
-                : current.replace(old_string, () => new_string);
+                if (occurrences === 0) {
+                    throw new ToolError(`${label}old_string was not found in ${file}. Read the file again and copy the text exactly. Nothing was written.`);
+                }
 
-            await fs.writeFile(absolute, updated, "utf8");
+                if (occurrences > 1 && !edit.replace_all) {
+                    throw new ToolError(`${label}old_string occurs ${occurrences} times in ${file}. Add surrounding context to make it unique, or set replace_all. Nothing was written.`);
+                }
 
-            return `Updated ${file}: ${replace_all ? occurrences : 1} replacement(s).`;
+                text = edit.replace_all
+                    ? text.split(oldText).join(newText)
+                    : text.replace(oldText, () => newText);
+
+                replacements += edit.replace_all ? occurrences : 1;
+            });
+
+            const result = await files.write(context.sessionId, file, text);
+
+            return `Updated ${file}: ${replacements} replacement(s).\n\n${result.diff}`;
         },
     });
 
     const writeFile = defineTool({
         name: "write_file",
-        description: "Creates a new file or overwrites an existing one with the given content. Prefer edit_file for changes to existing files.",
+        description: "Creates a new file or replaces the whole content of an existing one (an existing file must be read first). Prefer edit_file for changes to existing files.",
         inputSchema: z.object({
             path: z.string().describe("Workspace-relative file path."),
             content: z.string().describe("Full file content."),
         }),
         kind: "write",
-        run: async ({ path: file, content }) => {
-            const absolute = await resolve(file, "write");
-            const existed = await fs.stat(absolute).then(() => true, () => false);
+        run: async ({ path: file, content }, context) => {
+            const result = await files.write(context.sessionId, file, content);
 
-            await fs.mkdir(path.dirname(absolute), { recursive: true });
-            await fs.writeFile(absolute, content, "utf8");
-
-            return `${existed ? "Overwrote" : "Created"} ${file} (${content.length} characters).`;
+            return result.created
+                ? `Created ${file} (${content.split("\n").length} lines).`
+                : `Overwrote ${file}.\n\n${result.diff}`;
         },
     });
 
     return [readFile, listDir, editFile, writeFile];
-}
-
-async function readText(absolute: string, display: string): Promise<string> {
-    let content: string;
-
-    try {
-        content = await fs.readFile(absolute, "utf8");
-    }
-    catch (error) {
-        throw new ToolError(fsErrorMessage(error, display));
-    }
-
-    if (content.includes("\0")) {
-        throw new ToolError(`${display} looks like a binary file.`);
-    }
-
-    return content;
-}
-
-function fsErrorMessage(error: unknown, display: string): string {
-    const code = (error as NodeJS.ErrnoException).code;
-
-    switch (code) {
-        case "ENOENT":
-            return `${display} does not exist.`;
-        case "EISDIR":
-            return `${display} is a directory; use list_dir.`;
-        case "ENOTDIR":
-            return `${display} is not a directory.`;
-        default:
-            return `Cannot access ${display}: ${error instanceof Error ? error.message : String(error)}`;
-    }
 }
