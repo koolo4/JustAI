@@ -11,8 +11,7 @@ import {
 import type { SnapshotService } from "../../../infrastructure/git/SnapshotService.js";
 import type { PermissionService } from "../permissions/PermissionService.js";
 import type { AgentProfiles } from "../profiles.js";
-import { projectTree, readProjectRules } from "../prompts/ProjectContext.js";
-import { buildSystemPrompt } from "../prompts/SystemPrompt.js";
+import { buildSessionPrompt } from "../prompts/sessionPrompt.js";
 import type { ProviderRegistry } from "../providers/ProviderRegistry.js";
 import type { ToolRegistry } from "../tools/ToolRegistry.js";
 import { AgentLoop, createMessage, type AgentLoopStatus } from "./AgentLoop.js";
@@ -75,18 +74,11 @@ export class ExecutorRunner {
         const tools = this.deps.tools.select(profile.tools);
         const provider = this.deps.providers.create(request.executor.provider, request.executor.model);
 
-        const [rules, tree] = await Promise.all([
-            readProjectRules(this.deps.workspaceRoot),
-            projectTree(this.deps.workspaceRoot, this.deps.shouldIgnore),
-        ]);
-
-        const system = buildSystemPrompt({
+        const { system } = await buildSessionPrompt({
             profile,
             toolNames: tools.map(tool => tool.name),
             workspaceRoot: this.deps.workspaceRoot,
-            projectRules: rules,
-            tree,
-            date: new Date().toISOString().slice(0, 10),
+            shouldIgnore: this.deps.shouldIgnore,
         });
 
         const messages: Message[] = [];

@@ -25,8 +25,7 @@ import { NotFoundError } from "../../../core/errors/NotFoundError.js";
 import type { SnapshotChange, SnapshotService } from "../../../infrastructure/git/SnapshotService.js";
 import type { PermissionService } from "../permissions/PermissionService.js";
 import type { AgentProfiles } from "../profiles.js";
-import { projectTree, readProjectRules } from "../prompts/ProjectContext.js";
-import { buildSystemPrompt } from "../prompts/SystemPrompt.js";
+import { buildSessionPrompt } from "../prompts/sessionPrompt.js";
 import type { ProviderRegistry } from "../providers/ProviderRegistry.js";
 import { DELEGATE_TOOL, type DelegateInput } from "../tools/delegateTool.js";
 import { latestTodos } from "../tools/todoTool.js";
@@ -95,10 +94,12 @@ export class SessionManager {
             executor = { provider: instance.id, model: instance.model };
         }
 
-        const [rules, tree] = await Promise.all([
-            readProjectRules(this.deps.workspaceRoot),
-            projectTree(this.deps.workspaceRoot, this.deps.shouldIgnore),
-        ]);
+        const prompt = await buildSessionPrompt({
+            profile,
+            toolNames: tools.map(tool => tool.name),
+            workspaceRoot: this.deps.workspaceRoot,
+            shouldIgnore: this.deps.shouldIgnore,
+        });
 
         const now = new Date().toISOString();
 
@@ -119,14 +120,7 @@ export class SessionManager {
 
         const session: StoredSession = {
             summary,
-            system: buildSystemPrompt({
-                profile,
-                toolNames: tools.map(tool => tool.name),
-                workspaceRoot: this.deps.workspaceRoot,
-                projectRules: rules,
-                tree,
-                date: now.slice(0, 10),
-            }),
+            system: prompt.system,
             messages: [],
         };
 

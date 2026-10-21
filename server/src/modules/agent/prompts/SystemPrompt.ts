@@ -9,6 +9,8 @@ export interface SystemPromptInput {
     workspaceRoot: string;
     projectRules: ProjectRules | null;
     tree: string;
+    /** Раздел «команды проекта» (formatProjectCommands). */
+    projectCommands?: string;
     /** YYYY-MM-DD. Только дата: промпт фиксируется на всю сессию ради кэширования. */
     date: string;
     platform?: NodeJS.Platform;
@@ -57,6 +59,10 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
             "",
             input.projectRules.content,
         ].join("\n"));
+    }
+
+    if (input.projectCommands) {
+        sections.push(input.projectCommands);
     }
 
     if (input.tree) {
