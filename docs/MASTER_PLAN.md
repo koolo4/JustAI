@@ -339,40 +339,40 @@ GET    /api/agent/providers                    → провайдеры и мо�
 
 ### Фаза 0 — Гигиена и фундамент (≈1–2 дня)
 
-**P0-01 · .gitignore и чистка репозитория · TODO**
+**P0-01 · .gitignore и чистка репозитория · DONE**
 - Файлы: `.gitignore` (новый), удалить из git `repomix-output.txt`.
 - Шаги: игнорировать `node_modules/`, `dist/`, `.env`, `.justai/`, `*.log`, `coverage/`, `server/tests/**/*.js`, `*.d.ts`/`*.map` в tests.
 - DoD: `git status` после `npm install` и сборки чистый; `.env` и `.justai/` не отслеживаются.
 
-**P0-02 · Починить сборку TypeScript · TODO**
+**P0-02 · Починить сборку TypeScript · DONE**
 - Файлы: `tsconfig.base.json` (новый, корень), `server/tsconfig.json`, `apps/web/tsconfig.json`.
 - Шаги: base с `strict`, `noUncheckedIndexedAccess`, `module/moduleResolution: NodeNext` для сервера; убрать неиспользуемые `paths` (`@providers`, `@utils`, `@websocket` указывают на несуществующие папки).
 - DoD: `npm run build` в `server` и `apps/web` проходит без ошибок.
 
-**P0-03 · Тест-раннер · TODO**
+**P0-03 · Тест-раннер · DONE**
 - Файлы: `server/vitest.config.ts`, `server/package.json` (скрипты `test`, `test:watch`, `typecheck`), удалить скомпилированные `.js/.d.ts/.map` из `server/tests`.
 - DoD: `npm test` запускает 4 существующих теста, все зелёные; `npm run typecheck` — без ошибок.
 
-**P0-04 · Периметр сервера · TODO** · Зависит от: P0-02
+**P0-04 · Периметр сервера · DONE** · Зависит от: P0-02
 - Файлы: `server/src/app/Server.ts`, новый `server/src/core/middleware/AuthMiddleware.ts`, `apps/web/src/services/*` (заголовок токена), WS-подключение.
 - Шаги: раздел 6.1.
 - DoD: запрос без токена → 401; запрос с чужим Origin → отклонён; сервер не доступен по IP локальной сети. Тест на middleware.
 
-**P0-05 · Исправить PathResolver · TODO** · Зависит от: P0-03
+**P0-05 · Исправить PathResolver · DONE** · Зависит от: P0-03
 - Файлы: `PathResolver.ts`, новый `safePath()`; тесты.
 - Шаги: проверка через `path.relative` + `realpath`; запрет `.justai/` и `.git/` для записи.
 - DoD: тесты на `../`, соседнюю папку с общим префиксом, абсолютный путь, симлинк наружу — все отклоняются.
 
-**P0-06 · Убрать Browser Council (веб-UI чужих сервисов) · TODO**
+**P0-06 · Убрать Browser Council (веб-UI чужих сервисов) · DONE**
 - Файлы: `modules/ai/council/*`, `apps/web/src/components/AICouncil.tsx`, `councilApi.ts`, роуты; удалить `.justai/browser-profiles`.
 - Шаги: удалить код; идея «совета моделей» переносится в P5-03 (через API разных провайдеров). Записать ADR.
 - DoD: в коде нет обращений к chatgpt.com/claude.ai/deepseek; приложение собирается.
 
-**P0-07 · Удалить мёртвый код · TODO**
+**P0-07 · Удалить мёртвый код · DONE**
 - Файлы: `Planner.ts`, пустые `apps/web/api/*.ts`, `apps/web/src/app/{providers,router}.tsx`, `scripts/*.js`, `packages/shared/*` (будет пересоздан в P1-01), `server/event-test-2.txt`.
 - DoD: сборка и тесты проходят; в репозитории нет файлов нулевого размера.
 
-**P0-08 · Файлы для ИИ-агентов · TODO**
+**P0-08 · Файлы для ИИ-агентов · DONE**
 - Файлы: `AGENTS.md` (корень) и `CLAUDE.md` (ссылка на `AGENTS.md`).
 - Содержимое: команды сборки/тестов, структура, ссылка на этот план, протокол из раздела 9.
 - DoD: новый агент без доп. вопросов может собрать проект и запустить тесты.
@@ -580,3 +580,8 @@ P0-01..03 → P0-04,P0-05 → P1-01 → P1-02 → P1-03
 > Добавляй запись в конец: дата · ID задачи · кто (человек/агент и модель) · что сделано · что осталось/проблемы.
 
 - 2026-10-21 · — · Claude (Opus 5.5) · Проведён аудит версии 0.2.0, составлен этот план. Код не менялся.
+- 2026-10-21 · P0-01…P0-08 · Claude (Opus 5.5) · Фаза 0 завершена. Сервер и фронт собираются, 24 теста зелёные, e2e вручную: фронт получает токен, дерево/чат/WebSocket работают, запрос без токена → 401. Заметки для следующих задач:
+  - `git` нет в PATH; в этой среде использовался `%LOCALAPPDATA%\GitHubDesktop\app-*\resources\app\git\cmd\git.exe`.
+  - `IgnoreService` по умолчанию скрывает папку `tests` из дерева — пересмотреть при работе над FileTree.
+  - `playwright` оставлен в зависимостях для P3-03.
+  - CI (`.github/workflows/ci.yml`, раздел 8) ещё не создан — сделать вместе с P1-01, когда появятся npm workspaces.
