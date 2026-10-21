@@ -22,6 +22,10 @@ npm run dev:server                   # сервер на http://127.0.0.1:4302
 npm run dev:web                      # фронт на http://localhost:3000
 ```
 Без API-ключа работает провайдер `mock`. Ключи и модели — в `server/.env` (образец `server/.env.example`).
+Локальные модели: Ollama запускать с большим контекстом, иначе промпт обрезается молча:
+```powershell
+$env:OLLAMA_CONTEXT_LENGTH=32768; ollama serve
+```
 Папку проекта для агента задаёт `JUSTAI_WORKSPACE` (по умолчанию — корень этого репозитория).
 
 Задача считается выполненной, только когда `typecheck` и `test` проходят (раздел 9 плана).

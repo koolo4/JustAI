@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — Hybrid mode (21.10.2026)
+
+### Added
+
+- OpenAI-compatible provider with presets: Ollama, LM Studio, OpenRouter, Groq, Google Gemini, GitHub Models, DeepSeek.
+- Profile "Planner + local executor": a cloud model plans and reviews, `delegate_task` hands single steps to a local executor (Ollama by default) under the same permissions and restore point; progress streams into the task card.
+- Recovery for small models: text-written tool calls, malformed tool-call retries, invalid arguments reported back to the model.
+
+### Changed
+
+- `npm install <package>` is no longer considered a safe command; installing the project's own dependencies still is.
+- Windows exit codes are shown as signed numbers.
+
 ## Unreleased — Phase 2: IDE-level tools (21.10.2026)
 
 ### Added

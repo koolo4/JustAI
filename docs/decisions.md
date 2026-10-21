@@ -158,3 +158,27 @@ Reason:
 Consequences:
 - The "council of models" idea moves to MASTER_PLAN task P5-03 and will use official provider APIs only.
 - `playwright` stays as a dependency for the future local-UI verification tool (P3-03), which only opens localhost.
+
+---
+
+## ADR-006
+Date: 21.10.2026
+
+Title:
+Free operation via OpenAI-compatible APIs and a planner/executor split, not via web chat UIs
+
+Decision:
+- Free and local models are supported through one OpenAI-compatible provider with presets (Ollama, LM Studio, OpenRouter, Groq, Gemini, GitHub Models, DeepSeek).
+- Hybrid mode: a strong (cloud) model plans and reviews in the "planner" profile; a local model (Ollama) executes delegated steps via delegate_task.
+- Automating web chat interfaces (ChatGPT, Claude, DeepSeek, Arena) is rejected again.
+
+Reason:
+- The terms of these services forbid automated access; Arena's terms (section 5) explicitly forbid programmatic access and bots, and sections 3.3-3.4 allow sharing submitted content with third-party model providers without confidentiality.
+- Web UIs break on every change and add captchas and rate limits; an autonomous agent needs a stable API.
+- Most free tiers and local servers speak the OpenAI Chat Completions protocol, so one adapter covers them.
+- Small local models are weak planners but adequate executors of precise single steps; the planner receives the executor's real actions (from tool results), not only its narrative.
+
+Consequences:
+- delegate_task needs no approval itself; every executor action goes through the planner session's permission mode and restore point.
+- Ollama must run with a large context (OLLAMA_CONTEXT_LENGTH=32768), otherwise prompts are truncated silently.
+- Tool calling of small models is unreliable; the provider recognizes calls written as text and retries malformed ones.
