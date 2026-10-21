@@ -4,23 +4,25 @@
 Перед любой работой прочитай в нём разделы 1–6 и 9, затем возьми первую задачу `TODO` из раздела 7, у которой выполнены зависимости.
 
 ## Структура
+npm workspaces: один `npm install` в корне, один `package-lock.json`.
+- `packages/shared/` — контракты сервер ↔ фронт: сообщения, события, API (`@justai/shared`, собирается в `dist/`)
 - `server/` — backend (Node 22+, TypeScript strict, Express, ESM: в импортах указывай `.js`)
+  - `src/modules/agent/` — рантайм агента: `runtime/` (AgentLoop, сессии, бюджет), `providers/`, `tools/`, `prompts/`
 - `apps/web/` — frontend (React + Vite)
-- `packages/shared/` — общие типы (создаётся в задаче P1-01)
-- `docs/` — документация, ADR (`docs/decisions.md`), changelog
+- `docs/` — документация, ADR (`docs/decisions.md`), changelog, `api.md`
 - `.justai/` — локальное состояние сервера (токен, сессии). В git не попадает, агентским инструментам недоступно.
 
-## Команды
+## Команды (из корня)
 ```bash
-npm --prefix server install
-npm --prefix server run dev          # сервер на http://127.0.0.1:4302
-npm --prefix server test             # Vitest
-npm --prefix server run typecheck    # tsc для src и tests
-npm --prefix server run build
-npm --prefix apps/web install
-npm --prefix apps/web run dev        # фронт на http://localhost:3000
-npm --prefix apps/web run typecheck
+npm install
+npm run typecheck                    # shared + server (src и tests) + web
+npm test                             # Vitest (server)
+npm run build
+npm run dev:server                   # сервер на http://127.0.0.1:4302
+npm run dev:web                      # фронт на http://localhost:3000
 ```
+Без API-ключа работает провайдер `mock`. Ключи и модели — в `server/.env` (образец `server/.env.example`).
+Папку проекта для агента задаёт `JUSTAI_WORKSPACE` (по умолчанию — корень этого репозитория).
 
 Задача считается выполненной, только когда `typecheck` и `test` проходят (раздел 9 плана).
 

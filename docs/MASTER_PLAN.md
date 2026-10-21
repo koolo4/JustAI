@@ -230,7 +230,10 @@ export interface ModelProvider {
 - использовать официальные SDK (`@anthropic-ai/sdk`, `openai`), а не ручной `fetch`;
 - ретраи с экспоненциальной задержкой для 429/5xx/overloaded;
 - Anthropic: `cache_control` на последний блок системного промпта, на определения инструментов и на последнее сообщение истории;
-- модели по умолчанию берутся из конфига; значения по умолчанию в `.env.example` — актуальные (на дату плана: `claude-sonnet-5-5` для основного цикла, `claude-haiku-5-5` для дешёвых сабагентов/компакции, `claude-opus-5-5` как «тяжёлый» режим).
+- модели по умолчанию берутся из конфига; значения по умолчанию в `.env.example` — актуальные (с P1-03: `claude-opus-5-5` для основного цикла с `effort: high`, `claude-haiku-5-5` — кандидат для дешёвых сабагентов/компакции);
+- ответы провайдера хранятся в `meta.providerRaw` и отправляются тому же провайдеру без изменений (thinking-блоки Opus 5.5 обязаны возвращаться нетронутыми; история только дополняется — никаких правок прошлых сообщений, это же условие кэширования);
+- Anthropic: `eager_input_streaming` на инструментах + валидация входа zod в цикле; `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`) на случай отказа модели;
+- реализация: `server/src/modules/agent/providers/`. Фактический контракт — `ModelProvider.ts` (без `capabilities`/`countTokens`, добавить при необходимости).
 
 ### 5.3 Инструмент
 
@@ -262,34 +265,50 @@ export interface Tool<I = unknown> {
 
 ### 5.4 События сессии (WebSocket)
 
+Реализовано (источник правды — `packages/shared/src/events.ts`):
+
 ```ts
 export type AgentEvent =
-  | { type: "session.started"; sessionId: string }
+  | { type: "session.status"; sessionId: string; status: SessionStatus; error?: string } // idle|running|completed|stopped|failed
   | { type: "assistant.delta"; sessionId: string; text: string }
-  | { type: "assistant.message"; sessionId: string; message: Message }
+  | { type: "assistant.thinking_delta"; sessionId: string; text: string }
+  | { type: "message.added"; sessionId: string; message: Message }                       // без meta.providerRaw
   | { type: "tool.started"; sessionId: string; toolUseId: string; name: string; input: unknown }
-  | { type: "tool.progress"; sessionId: string; toolUseId: string; chunk: string }      // stdout команды
+  | { type: "tool.progress"; sessionId: string; toolUseId: string; chunk: string }      // stdout команды (P2-03)
   | { type: "tool.finished"; sessionId: string; toolUseId: string; isError: boolean; preview: string }
-  | { type: "permission.request"; sessionId: string; requestId: string; tool: string; input: unknown; reason: string }
-  | { type: "file.changed"; sessionId: string; path: string; diff: string }
-  | { type: "todo.updated"; sessionId: string; todos: Todo[] }
-  | { type: "budget.updated"; sessionId: string; usage: Usage; costUsd: number; steps: number }
-  | { type: "session.completed"; sessionId: string; summary: string; diff: string }
-  | { type: "session.failed"; sessionId: string; error: string };
+  | { type: "budget.updated"; sessionId: string; usage: Usage; steps: number };
+```
+
+Будет добавлено соответствующими задачами:
+
+```ts
+  | { type: "permission.request"; sessionId: string; requestId: string; tool: string; input: unknown; reason: string } // P2-04
+  | { type: "file.changed"; sessionId: string; path: string; diff: string }   // P2-01
+  | { type: "todo.updated"; sessionId: string; todos: Todo[] }                // P2-06
+  | { type: "session.diff"; sessionId: string; diff: string }                 // P2-05, итоговый дифф сессии
 ```
 
 ### 5.5 REST API (агент)
 
+Реализовано (типы — `packages/shared/src/api.ts`, подробности — `docs/api.md`):
+
 ```
-POST   /api/agent/sessions                     → { sessionId }           body: { profile?, provider?, model?, mode? }
-GET    /api/agent/sessions                     → список сессий
-GET    /api/agent/sessions/:id                 → сообщения + статус
-POST   /api/agent/sessions/:id/messages        → 202                     body: { text, attachments? }
-POST   /api/agent/sessions/:id/stop            → остановить цикл
-POST   /api/agent/sessions/:id/permissions/:requestId   body: { decision: "allow" | "allow_always" | "deny", note? }
-POST   /api/agent/sessions/:id/revert          → откат к снапшоту
-GET    /api/agent/sessions/:id/diff            → итоговый дифф сессии
-GET    /api/agent/providers                    → провайдеры и модели
+GET    /api/agent/providers                    → { providers, defaultProvider }
+GET    /api/agent/profiles                     → { profiles }
+POST   /api/agent/sessions                     → 201 { session }         body: { profile?, provider?, model? }
+GET    /api/agent/sessions                     → { sessions }
+GET    /api/agent/sessions/:id                 → { session, messages }
+POST   /api/agent/sessions/:id/messages        → 202 { session }         body: { text, activeFile? }   (409, если агент уже работает)
+POST   /api/agent/sessions/:id/stop            → { session }
+```
+
+Будет добавлено:
+
+```
+POST   /api/agent/sessions                     body: + mode                                            // P2-04
+POST   /api/agent/sessions/:id/permissions/:requestId   body: { decision: "allow" | "allow_always" | "deny", note? }  // P2-04
+POST   /api/agent/sessions/:id/revert          → откат к снапшоту                                      // P2-05
+GET    /api/agent/sessions/:id/diff            → итоговый дифф сессии                                  // P2-05
 ```
 
 ---
@@ -381,41 +400,41 @@ GET    /api/agent/providers                    → провайдеры и мо�
 
 ### Фаза 1 — Новый Agent Runtime (≈1–2 недели)
 
-**P1-01 · Внутренний формат сообщений и shared-типы · TODO** · Зависит от: P0-02
+**P1-01 · Внутренний формат сообщений и shared-типы · DONE** · Зависит от: P0-02
 - Файлы: `packages/shared/src/{messages,events,api}.ts`, `package.json` (npm workspaces в корне).
 - Шаги: типы из разделов 5.1, 5.4, 5.5; корневой `package.json` с `workspaces: ["server","apps/web","packages/*"]`.
 - DoD: сервер и фронт импортируют `@justai/shared`; typecheck проходит.
 
-**P1-02 · Интерфейс ModelProvider + MockProvider нового образца · TODO** · Зависит от: P1-01
+**P1-02 · Интерфейс ModelProvider + MockProvider нового образца · DONE** · Зависит от: P1-01
 - Файлы: `server/src/modules/agent/providers/{ModelProvider.ts,MockProvider.ts}`.
 - Шаги: Mock умеет сценарии («скрипт» ответов с tool_use) — нужен для тестов цикла без сети.
 - DoD: юнит-тест: Mock по сценарию возвращает 2 параллельных tool_use, затем текст.
 
-**P1-03 · AnthropicProvider и OpenAIProvider на официальных SDK · TODO** · Зависит от: P1-02
+**P1-03 · AnthropicProvider и OpenAIProvider на официальных SDK · DONE (живой e2e с ключом не проводился — см. журнал)** · Зависит от: P1-02
 - Файлы: `providers/AnthropicProvider.ts`, `providers/OpenAIProvider.ts`, `providers/ProviderRegistry.ts`, `.env.example`.
 - Шаги: стриминг; маппинг внутреннего формата ↔ формат API (включая `tool_result` с id, `is_error`, изображения); несколько tool_use в одном ответе; ретраи; prompt caching (Anthropic); актуальные модели по умолчанию.
 - DoD: юнит-тесты маппинга (без сети); ручной e2e: «прочитай package.json и скажи версию» работает с реальным ключом; второй запрос в сессии показывает `cacheReadTokens > 0`.
 
-**P1-04 · AgentLoop · TODO** · Зависит от: P1-02
+**P1-04 · AgentLoop · DONE** · Зависит от: P1-02
 - Файлы: `runtime/AgentLoop.ts`, `runtime/Budget.ts`.
 - Шаги: цикл из 4.3; параллельное выполнение `read`-инструментов; ошибки инструментов и zod-валидации → `tool_result` с `isError: true`; бюджеты: `maxSteps` (по умолчанию 100), `maxTokens`, `maxCostUsd`, `maxWallTime`; `AbortSignal` для «Стоп»; обработка `max_tokens` (продолжить) и `refusal` (завершить с сообщением).
 - DoD: тесты на Mock: (а) 3 шага с инструментами и финальный ответ; (б) инструмент бросает ошибку → модель получает isError и продолжает; (в) stop прерывает цикл ≤1 с; (г) исчерпание бюджета → корректный `session.failed`/итог.
 
-**P1-05 · SessionManager и хранение · TODO** · Зависит от: P1-04
+**P1-05 · SessionManager и хранение · DONE** · Зависит от: P1-04
 - Файлы: `runtime/SessionManager.ts`, `runtime/SessionStore.ts` (JSONL в `.justai/sessions/`).
 - DoD: сессию можно продолжить после перезапуска сервера; тест на запись/чтение.
 
-**P1-06 · REST + WS для сессий · TODO** · Зависит от: P1-05, P0-04
+**P1-06 · REST + WS для сессий · DONE** · Зависит от: P1-05, P0-04
 - Файлы: `modules/agent/AgentController.ts`, `AgentRoutes.ts`, расширение `WebSocketGateway` (подписка на `sessionId`).
 - Шаги: эндпоинты 5.5, события 5.4.
 - DoD: интеграционный тест (supertest + ws): создать сессию → отправить сообщение → получить `assistant.delta` и `session.completed` на Mock.
 
-**P1-07 · Системный промпт и контекст проекта · TODO** · Зависит от: P1-04
+**P1-07 · Системный промпт и контекст проекта · DONE** · Зависит от: P1-04
 - Файлы: `prompts/SystemPrompt.ts`, `project/ProjectRules.ts`.
 - Шаги: блоки промпта: роль и принципы (разделы 2, 6.4); окружение (ОС, shell, дата, корень workspace); правила проекта из `JUSTAI.md`/`AGENTS.md`/`CLAUDE.md` в корне workspace; краткое дерево (2 уровня, с учётом ignore); инструкция «проверяй свою работу».
 - DoD: snapshot-тест промпта; правила проекта подхватываются.
 
-**P1-08 · Миграция фронта на новые сессии и удаление старого `modules/ai` · TODO** · Зависит от: P1-06
+**P1-08 · Миграция фронта на новые сессии и удаление старого `modules/ai` · DONE** · Зависит от: P1-06
 - Файлы: `apps/web/src/features/agent/*`, удалить `server/src/modules/ai/{AIService,agent,prompt,context}` после переноса.
 - DoD: чат во фронте работает через `/api/agent/*` со стримингом; старые эндпоинты удалены.
 
@@ -585,3 +604,10 @@ P0-01..03 → P0-04,P0-05 → P1-01 → P1-02 → P1-03
   - `IgnoreService` по умолчанию скрывает папку `tests` из дерева — пересмотреть при работе над FileTree.
   - `playwright` оставлен в зависимостях для P3-03.
   - CI (`.github/workflows/ci.yml`, раздел 8) ещё не создан — сделать вместе с P1-01, когда появятся npm workspaces.
+- 2026-10-21 · P1-01…P1-08 · Claude (Opus 5.5) · Фаза 1 завершена: новый рантайм агента `server/src/modules/agent`, старый `modules/ai` удалён. 60 тестов, typecheck и build зелёные; в браузере проверено: сессия на Mock → read_file → ответ стримится, история сессий, продолжение после рестарта. Заметки:
+  - **P1-03: живой прогон с реальным ключом не выполнен** (в среде не было ANTHROPIC_API_KEY/OPENAI_API_KEY). Маппинг покрыт юнит-тестами. Первому, у кого есть ключ: создать сессию с provider=anthropic, попросить «прочитай package.json и скажи версию», затем второе сообщение — проверить `cacheReadTokens > 0` в budget.updated. Для OpenAI проверить, что `OPENAI_MODEL` поддерживает reasoning (иначе `OPENAI_REASONING_EFFORT=off`).
+  - CI добавлен (`.github/workflows/ci.yml`), npm workspaces в корне, единый lockfile. vitest 5 / vite 8 (аудит: 0 уязвимостей).
+  - `server/.env` пользователя был копией старого `.env.example` (без ключей) — заменён новой копией.
+  - Модель по умолчанию — `claude-opus-5-5` с `effort: high` (раздел 5.2 обновлён).
+  - Записи файлов агентом пока идут напрямую через fs, а не через WorkspaceService (дерево файлов в UI не обновляется само) — это P2-01.
+  - Фронт: при обрыве WebSocket события теряются; после переподключения состояние сессии перечитывается с сервера.

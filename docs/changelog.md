@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased — Phase 1: Agent Runtime (21.10.2026)
+
+### Added
+
+- `server/src/modules/agent`: new agent runtime.
+  - Internal message format with tool_use ids, raw JSON tool input, tool_result with is_error (`@justai/shared`).
+  - `AgentLoop`: append-only history, parallel read-only tools, tool errors returned to the model, abort with consistent history, budgets (steps / output tokens / wall time), max_tokens and refusal handling.
+  - Providers on official SDKs with streaming: Anthropic (`claude-opus-5-5` by default, adaptive thinking, effort, prompt caching, eager tool input streaming, server-side fallbacks), OpenAI Responses API, scripted Mock.
+  - Sessions persisted as JSONL in `.justai/sessions`, resumable after restart.
+  - System prompt with environment, project rules (`JUSTAI.md` / `AGENTS.md` / `CLAUDE.md`) and project tree, frozen per session.
+  - Tools: `read_file` (line numbers, paging), `list_dir`, `edit_file`, `write_file`, `word_read`, `word_edit`.
+- REST `/api/agent/*` and agent events over WebSocket.
+- Web: agent chat with streaming, tool cards, thinking, Stop, session history.
+- npm workspaces, `@justai/shared`, GitHub Actions CI.
+
+### Removed
+
+- `server/src/modules/ai` and `/api/ai/*` (single-string prompt concatenation, first-tool-only handling).
+
+### Changed
+
+- vitest 5, vite 8, @vitejs/plugin-react 6.
+
 ## Unreleased — Phase 0 (21.10.2026)
 
 ### Security
