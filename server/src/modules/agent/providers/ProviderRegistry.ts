@@ -6,7 +6,8 @@ import { MockProvider } from "./MockProvider.js";
 import type { ModelProvider } from "./ModelProvider.js";
 import { OPENAI_DEFAULT_MODEL, OpenAIProvider } from "./OpenAIProvider.js";
 import { OpenAICompatibleProvider } from "./OpenAICompatibleProvider.js";
-import { COMPATIBLE_PRESETS, findPreset, resolvePreset } from "./compatiblePresets.js";
+import { COMPATIBLE_PRESETS, findPreset, RESERVE_IDS, resolvePreset } from "./compatiblePresets.js";
+import { FallbackProvider } from "./FallbackProvider.js";
 
 const ANTHROPIC_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 const OPENAI_EFFORTS = ["minimal", "low", "medium", "high"] as const;
@@ -57,7 +58,33 @@ export class ProviderRegistry {
         ];
     }
 
+    /**
+     * Создаёт провайдера; если настроены резервы (RESERVE1_*, RESERVE2_*), оборачивает его так,
+     * чтобы при исчерпании токенов или лимита ход уходил резерву.
+     */
     public create(id: string, model?: string): ModelProvider {
+        const primary = this.createSingle(id, model);
+        const reserves = this.configuredReserves().filter(reserve => reserve !== id);
+
+        if (id === "mock" || RESERVE_IDS.includes(id as typeof RESERVE_IDS[number]) || reserves.length === 0) {
+            return primary;
+        }
+
+        return new FallbackProvider({
+            primary,
+            reserves: reserves.map(reserve => () => this.createSingle(reserve)),
+            cooldownMs: positive(this.env.JUSTAI_RESERVE_COOLDOWN_SEC, 120) * 1000,
+            onSwitch: (from, to, reason) =>
+                console.warn(`[reserve] ${from.id}/${from.model} → ${to.id}/${to.model}: ${reason.slice(0, 200)}`),
+        });
+    }
+
+    /** Резервы, у которых заданы адрес и модель. */
+    public configuredReserves(): string[] {
+        return RESERVE_IDS.filter(id => resolvePreset(findPreset(id)!, this.env).configured);
+    }
+
+    private createSingle(id: string, model?: string): ModelProvider {
         switch (id) {
             case "anthropic":
                 return new AnthropicProvider({
@@ -90,6 +117,10 @@ export class ProviderRegistry {
 
                 if (!resolved.model) {
                     throw new BadRequestError(`Set ${preset.prefix}_MODEL in server/.env or pass a model for ${preset.label}.`);
+                }
+
+                if (!resolved.baseURL) {
+                    throw new BadRequestError(`Set ${preset.prefix}_BASE_URL in server/.env for ${preset.label}.`);
                 }
 
                 return new OpenAICompatibleProvider({

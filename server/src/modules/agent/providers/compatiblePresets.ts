@@ -19,6 +19,24 @@ export interface CompatiblePreset {
     contextTokens: number;
     streamUsage?: boolean;
     headers?: Record<string, string>;
+    /** Ключ необязателен (например, резерв может указывать на локальный сервер). */
+    keyOptional?: boolean;
+}
+
+/** Резервные «эксперты»: любой OpenAI-совместимый сервер, задаётся целиком через env. */
+export const RESERVE_IDS = ["reserve1", "reserve2"] as const;
+
+function reservePreset(n: 1 | 2): CompatiblePreset {
+    return {
+        id: `reserve${n}`,
+        label: `Резерв ${n}`,
+        prefix: `RESERVE${n}`,
+        baseURL: "",
+        keyEnv: [`RESERVE${n}_API_KEY`],
+        local: false,
+        keyOptional: true,
+        contextTokens: 32_768,
+    };
 }
 
 export const COMPATIBLE_PRESETS: CompatiblePreset[] = [
@@ -92,6 +110,8 @@ export const COMPATIBLE_PRESETS: CompatiblePreset[] = [
         local: false,
         contextTokens: 128_000,
     },
+    reservePreset(1),
+    reservePreset(2),
 ];
 
 export function findPreset(id: string): CompatiblePreset | undefined {
@@ -114,16 +134,17 @@ export function resolvePreset(preset: CompatiblePreset, env: NodeJS.ProcessEnv, 
     const resolvedModel = model || env[`${preset.prefix}_MODEL`] || preset.defaultModel;
     const maxTokens = Number(env[`${preset.prefix}_MAX_TOKENS`]);
     const context = Number(env[`${preset.prefix}_CONTEXT`]);
+    const baseURL = env[`${preset.prefix}_BASE_URL`] || preset.baseURL;
 
     return {
         preset,
-        baseURL: env[`${preset.prefix}_BASE_URL`] || preset.baseURL,
+        baseURL,
         apiKey,
         model: resolvedModel,
         // Локальные модели медленные: длинный ответ — чаще всего зацикливание.
         maxOutputTokens: Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : (preset.local ? 4096 : 8192),
         contextTokens: Number.isFinite(context) && context > 0 ? context : preset.contextTokens,
         reasoningEffort: env[`${preset.prefix}_REASONING_EFFORT`] || undefined,
-        configured: Boolean(resolvedModel) && (preset.local || Boolean(apiKey)),
+        configured: Boolean(resolvedModel) && Boolean(baseURL) && (preset.local || preset.keyOptional === true || Boolean(apiKey)),
     };
 }
