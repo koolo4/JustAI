@@ -131,6 +131,32 @@ describe("AgentLoop", () => {
         expect(invalid).toMatchObject({ isError: true, content: expect.stringContaining("Invalid input for 'echo'") });
     });
 
+    it("runs tools called with a namespace prefix (repo_browser.list_dir)", async () => {
+        const { loop, user, saved, events } = setup([
+            { toolCalls: [{ name: "repo_browser.echo", input: { text: "a" } }, { name: "functions.echo", input: { text: "b" } }] },
+            { text: "ok" },
+        ]);
+
+        await loop.run([user]);
+
+        expect(toolResults(saved[1]).map(result => result.content)).toEqual(["echo:a", "echo:b"]);
+        expect(events.filter(event => event.type === "tool.started").map(event => (event as { name: string }).name)).toEqual(["echo", "echo"]);
+    });
+
+    it("does not treat an empty reply as finished", async () => {
+        const { loop, user, saved, provider } = setup([
+            { text: "" },
+            { toolCalls: [{ name: "echo", input: { text: "now" } }] },
+            { text: "done" },
+        ]);
+
+        const result = await loop.run([user]);
+
+        expect(result.status).toBe("completed");
+        expect(provider.requests).toHaveLength(3);
+        expect(saved[1]!.content).toEqual([{ type: "text", text: expect.stringContaining("Your reply was empty") }]);
+    });
+
     it("stops within a second when aborted during a model call", async () => {
         const controller = new AbortController();
         const { loop, user } = setup(

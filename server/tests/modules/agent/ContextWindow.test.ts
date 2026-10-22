@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { Message } from "@justai/shared";
 
 import { createMessage } from "../../../src/modules/agent/runtime/AgentLoop.js";
-import { estimateTokens, fitToContextWindow, messageTokens } from "../../../src/modules/agent/runtime/ContextWindow.js";
+import { estimateTokens, fitToContextWindow, messageTokens, stepsIn } from "../../../src/modules/agent/runtime/ContextWindow.js";
 
 const options = { window: 32_768, reserveForOutput: 8_192, system: "s".repeat(6_000), tools: [] };
 
@@ -85,5 +85,40 @@ describe("fitToContextWindow", () => {
         expect(text).toContain("Files you already changed: src/file3.ts");
         expect(text).toContain("- [in_progress] phase");
         expect(result.messages[0]!.content[0]).toEqual({ type: "text", text: "Refactor the project." });
+    });
+});
+
+describe("stepsIn", () => {
+    it("summarises dropped steps with their outcome so the model does not repeat them", () => {
+        const messages: Message[] = [
+            createMessage("assistant", [
+                { type: "tool_use", id: "a", name: "read_file", input: { path: "index.html" } },
+                { type: "tool_use", id: "b", name: "todo_write", input: { todos: [] } },
+            ]),
+            createMessage("user", [
+                { type: "tool_result", toolUseId: "a", content: "1\t<!DOCTYPE html>", isError: false },
+                { type: "tool_result", toolUseId: "b", content: "Plan updated", isError: false },
+            ]),
+            createMessage("assistant", [{ type: "tool_use", id: "c", name: "delegate_task", input: { task: "Create script.js\nwith the game" } }]),
+            createMessage("user", [{ type: "tool_result", toolUseId: "c", content: "\nExecutor ollama/qwen3:8b: completed after 2 step(s).\nmore", isError: false }]),
+            createMessage("assistant", [{ type: "tool_use", id: "d", name: "read_file", input: { path: "style.css" } }]),
+            createMessage("user", [{ type: "tool_result", toolUseId: "d", content: "style.css does not exist.", isError: true }]),
+        ];
+
+        expect(stepsIn(messages)).toEqual([
+            "- read_file index.html → ok",
+            "- delegate_task Create script.js with the game → Executor ollama/qwen3:8b: completed after 2 step(s).",
+            "- read_file style.css → failed: style.css does not exist.",
+        ]);
+    });
+
+    it("is included in the note when old turns are dropped", () => {
+        const result = fitToContextWindow(longSession(40), { ...options, window: 3_000, reserveForOutput: 1_000, system: "s" });
+        const note = result.messages[0]!.content.at(-1);
+
+        expect(note).toMatchObject({ type: "text", text: expect.stringContaining("Steps already done") });
+        // 39 шагов выброшено, todo_write не считается: старые свёрнуты в одну строку, последние 30 перечислены.
+        expect((note as { text: string }).text).toContain("- … 8 earlier step(s)");
+        expect((note as { text: string }).text).toContain("- read_file src/file37.ts → ok");
     });
 });

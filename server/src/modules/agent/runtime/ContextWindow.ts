@@ -137,12 +137,14 @@ export function fitToContextWindow(messages: Message[], options: ContextWindowOp
     const dropped = result.slice(1, cut);
     const changedFiles = filesChangedIn(dropped);
     const plan = latestPlan(dropped);
+    const steps = stepsIn(dropped);
 
     const note: ContentBlock = {
         type: "text",
         text: [
-            `[Note: ${removed} earlier message(s) of this session were removed to fit the context window. Re-read files if you need details.]`,
+            `[Note: ${removed} earlier message(s) of this session were removed to fit the context window. Do not repeat the steps below; re-read a file only if you need its exact current lines.]`,
             changedFiles.length > 0 ? `Files you already changed: ${changedFiles.join(", ")}` : "",
+            steps.length > 0 ? `Steps already done (oldest first):\n${steps.join("\n")}` : "",
             plan ? `Your plan at that point:\n${plan}` : "",
         ].filter(Boolean).join("\n"),
     };
@@ -175,6 +177,59 @@ function filesChangedIn(messages: Message[]): string[] {
     }
 
     return [...files];
+}
+
+const MAX_STEPS = 30;
+
+/**
+ * Короткий журнал выброшенных шагов: «read_file index.html → ok», «delegate_task: … → <первая строка ответа>».
+ * Без него модель с маленьким окном забывает сделанное и повторяет шаги по кругу.
+ */
+export function stepsIn(messages: Message[]): string[] {
+    const results = new Map<string, { isError: boolean; first: string }>();
+
+    for (const message of messages) {
+        for (const block of message.content) {
+            if (block.type === "tool_result") {
+                const text = typeof block.content === "string"
+                    ? block.content
+                    : block.content.map(part => part.type === "text" ? part.text : "[image]").join(" ");
+                results.set(block.toolUseId, { isError: block.isError === true, first: firstLine(text) });
+            }
+        }
+    }
+
+    const steps: string[] = [];
+
+    for (const message of messages) {
+        for (const block of message.content) {
+            if (block.type !== "tool_use" || block.name === "todo_write") {
+                continue;
+            }
+
+            const result = results.get(block.id);
+            const outcome = !result ? "no result" : result.isError ? `failed: ${result.first}` : block.name === "read_file" ? "ok" : result.first;
+            steps.push(`- ${block.name} ${describeInput(block.input)} → ${outcome}`);
+        }
+    }
+
+    return steps.length > MAX_STEPS
+        ? [`- … ${steps.length - MAX_STEPS} earlier step(s)`, ...steps.slice(-MAX_STEPS)]
+        : steps;
+}
+
+function describeInput(input: unknown): string {
+    const value = input as { path?: unknown; command?: unknown; task?: unknown; pattern?: unknown } | null;
+    const main = value?.path ?? value?.command ?? value?.task ?? value?.pattern;
+    return typeof main === "string" ? clip(main.replace(/\s+/g, " "), 100) : "";
+}
+
+function firstLine(text: string): string {
+    return clip(text.trim().split("\n").find(line => line.trim() !== "")?.trim() ?? "", 120);
+}
+
+function clip(text: string, max: number): string {
+    return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
 function latestPlan(messages: Message[]): string {

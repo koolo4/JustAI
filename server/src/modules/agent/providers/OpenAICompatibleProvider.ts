@@ -100,6 +100,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
         const calls = new Map<number, { id: string; name: string; arguments: string }>();
         let text = "";
         let checkedAt = 0;
+        let reasoningText = "";
+        let thinkingCheckedAt = 0;
         let finish: string | null = null;
         let usage: ChatCompletionChunk["usage"] = null;
         let model = this.model;
@@ -141,7 +143,14 @@ export class OpenAICompatibleProvider implements ModelProvider {
                 const reasoning = delta.reasoning_content ?? delta.reasoning;
 
                 if (reasoning) {
+                    reasoningText += reasoning;
                     yield { type: "thinking_delta", text: reasoning };
+
+                    // Размышления тоже зацикливаются (gpt-oss повторяет одну фразу) — тот же сторож.
+                    if (reasoningText.length - thinkingCheckedAt >= 250 && (thinkingCheckedAt = reasoningText.length) && isRepeating(reasoningText)) {
+                        local.abort();
+                        throw new ModelOutputError("The model got stuck repeating the same reasoning; the request was interrupted.");
+                    }
                 }
 
                 if (delta.content) {

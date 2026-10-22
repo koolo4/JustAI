@@ -171,6 +171,16 @@ export class AgentLoop {
                     continue;
                 }
 
+                // Пустой ответ — не «готово»: небольшие модели так иногда отвечают на длинное задание.
+                if (isEmptyReply(turn.content) && turn.stopReason !== "max_tokens" && formatRetries < MAX_FORMAT_RETRIES) {
+                    formatRetries += 1;
+                    await add(createMessage("user", [{
+                        type: "text",
+                        text: "[JustAI] Your reply was empty. Do the task now by calling the tools (for example write_file or edit_file), then reply with a short report of what you did.",
+                    }]));
+                    continue;
+                }
+
                 if (
                     this.options.provider.smallModelGuards &&
                     formatRetries < MAX_FORMAT_RETRIES &&
@@ -332,7 +342,7 @@ export class AgentLoop {
 
             while (index < uses.length) {
                 const use = uses[index]!;
-                const isRead = this.toolsByName.get(use.name)?.kind === "read";
+                const isRead = this.findTool(use.name)?.kind === "read";
 
                 if (batch.length > 0 && !isRead) {
                     break;
@@ -352,6 +362,14 @@ export class AgentLoop {
         return results;
     }
 
+    /**
+     * Инструмент по имени. Некоторые модели (gpt-oss) добавляют пространство имён:
+     * «repo_browser.list_dir», «functions.read_file» — берём часть после последней точки/двоеточия.
+     */
+    private findTool(name: string): Tool | undefined {
+        return this.toolsByName.get(name) ?? this.toolsByName.get(name.split(/[.:/]/).pop() ?? name);
+    }
+
     private async executeTool(use: ToolUseBlock): Promise<ToolResultBlock> {
         const { sessionId, signal } = this.options;
 
@@ -359,7 +377,7 @@ export class AgentLoop {
             return errorResult(use.id, "Cancelled by user before execution.");
         }
 
-        const tool = this.toolsByName.get(use.name);
+        const tool = this.findTool(use.name);
 
         if (!tool) {
             return errorResult(
@@ -404,7 +422,7 @@ export class AgentLoop {
             type: "tool.started",
             sessionId,
             toolUseId: use.id,
-            name: use.name,
+            name: tool.name,
             input: use.input,
         });
 
@@ -485,6 +503,12 @@ export function claimsFileChanges(content: ContentBlock[]): boolean {
         .join("\n");
 
     return /\b(has|have) been (added|updated|created|modified|implemented|fixed|changed|written)\b|\bI(?:'ve| have)? (added|updated|created|modified|implemented|fixed|changed|wrote|rewrote)\b|<tool_response>/i.test(text);
+}
+
+/** В ответе нет ни текста, ни вызова инструмента (размышления не считаются). */
+export function isEmptyReply(content: ContentBlock[]): boolean {
+    return !content.some(block =>
+        block.type === "tool_use" || (block.type === "text" && block.text.trim() !== ""));
 }
 
 function errorResult(toolUseId: string, text: string): ToolResultBlock {
