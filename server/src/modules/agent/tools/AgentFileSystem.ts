@@ -192,7 +192,7 @@ async function readRaw(absolute: string, display: string): Promise<string> {
     let raw: string;
 
     try {
-        raw = await fs.readFile(absolute, "utf8");
+        raw = decodeText(await fs.readFile(absolute));
     }
     catch (error) {
         throw new ToolError(fsErrorMessage(error, display));
@@ -203,6 +203,25 @@ async function readRaw(absolute: string, display: string): Promise<string> {
     }
 
     return raw;
+}
+
+/**
+ * UTF-8, а файлы с BOM UTF-16 (так пишет `echo > file` в Windows PowerShell 5.1) — тоже как текст.
+ * BOM остаётся первым символом; при правке такой файл сохраняется в UTF-8 с BOM.
+ */
+export function decodeText(buffer: Buffer): string {
+    if (buffer[0] === 0xff && buffer[1] === 0xfe) {
+        return buffer.toString("utf16le");
+    }
+
+    if (buffer[0] === 0xfe && buffer[1] === 0xff) {
+        // swap16 требует чётную длину.
+        const swapped = Buffer.from(buffer.subarray(0, buffer.length - (buffer.length % 2)));
+        swapped.swap16();
+        return swapped.toString("utf16le");
+    }
+
+    return buffer.toString("utf8");
 }
 
 export function fsErrorMessage(error: unknown, display: string): string {
