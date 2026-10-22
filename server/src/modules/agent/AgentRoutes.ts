@@ -17,6 +17,7 @@ export function createAgentRouter(controller: AgentController): Router {
     router.post("/sessions/:id/stop", controller.stopSession);
     router.get("/sessions/:id/changes", controller.sessionChanges);
     router.post("/sessions/:id/revert", controller.revertSession);
+    router.post("/sessions/:id/accept", controller.acceptSession);
 
     return router;
 }

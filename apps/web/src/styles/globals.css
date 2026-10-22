@@ -203,6 +203,18 @@ button {
     border: 1px solid #7a2a30;
 }
 
+.diff-actions .allow-button {
+    padding: 6px 12px;
+    color: white;
+    background: #1d3a24;
+    border: 1px solid #2a7a3a;
+}
+
+.diff-actions button:disabled {
+    opacity: .5;
+    cursor: not-allowed;
+}
+
 .diff-empty {
     margin: auto;
 }

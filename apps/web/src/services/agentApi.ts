@@ -109,8 +109,22 @@ export function fetchSessionChanges(id: string): Promise<SessionChangesResponse>
     return request(`/agent/sessions/${encodeURIComponent(id)}/changes`);
 }
 
-export function revertSession(id: string): Promise<RevertResponse> {
-    return request(`/agent/sessions/${encodeURIComponent(id)}/revert`, { method: "POST" });
+/** `paths` — откатить только эти файлы; без него — все изменения сессии. */
+export function revertSession(id: string, paths?: string[]): Promise<RevertResponse> {
+    return request(`/agent/sessions/${encodeURIComponent(id)}/revert`, {
+        method: "POST",
+        body: JSON.stringify(paths ? { paths } : {}),
+    });
+}
+
+/** Принять изменения сессии: откатить их после этого будет нельзя. */
+export async function acceptSession(id: string): Promise<void> {
+    const response = await apiFetch(`/agent/sessions/${encodeURIComponent(id)}/accept`, { method: "POST" });
+
+    if (!response.ok) {
+        const body = await response.json().catch(() => null) as Partial<ApiErrorBody> | null;
+        throw new Error(body?.error?.message ?? `${response.status} ${response.statusText}`);
+    }
 }
 
 export async function stopSession(id: string): Promise<SessionSummary> {

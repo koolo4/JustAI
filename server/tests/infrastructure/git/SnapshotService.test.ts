@@ -68,6 +68,21 @@ describe.skipIf(!git.available)("SnapshotService", () => {
         expect((await snapshots.changes("s1")).files).toEqual([]);
     }, 30_000);
 
+    it("reverts only the selected files", async () => {
+        await snapshots.ensure("s1");
+        await write("a.txt", "a changed\n");
+        await write("b.txt", "b changed\n");
+        await workspace.write("src/new.ts", "export {};\n");
+
+        const reverted = await snapshots.revert("s1", ["a.txt", "src/new.ts"]);
+
+        expect(reverted.map(change => change.path).sort()).toEqual(["a.txt", "src/new.ts"]);
+        expect(await disk("a.txt")).toBe("a original\n");
+        expect(await disk("b.txt")).toBe("b changed\n");
+        expect(existsSync(path.join(workspace.root, "src/new.ts"))).toBe(false);
+        expect((await snapshots.changes("s1")).files).toEqual([{ path: "b.txt", status: "modified" }]);
+    }, 30_000);
+
     it("keeps the first snapshot of a session and separates sessions", async () => {
         await snapshots.ensure("s1");
         await write("a.txt", "first edit\n");

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import type { FileChange, SessionChangesResponse } from "@justai/shared";
 
-import { fetchSessionChanges, revertSession } from "../../services/agentApi";
+import { acceptSession, fetchSessionChanges, revertSession } from "../../services/agentApi";
 import { parseUnifiedDiff, type FileDiff } from "./parseUnifiedDiff";
 
 interface Props {
@@ -38,14 +38,15 @@ export function DiffReview({ sessionId, sessionTitle, busy, onOpenFile, onClose 
     const current = diffs.get(selected);
     const status = changes?.files.find(file => file.path === selected);
 
-    async function revertAll() {
-        if (!changes || !window.confirm(`Revert all ${changes.files.length} file(s) changed in this session?`)) {
+    async function act(question: string, action: () => Promise<unknown>) {
+        if (!window.confirm(question)) {
             return;
         }
 
         try {
             setReverting(true);
-            await revertSession(sessionId);
+            setError("");
+            await action();
             load();
         }
         catch (reason) {
@@ -56,6 +57,21 @@ export function DiffReview({ sessionId, sessionTitle, busy, onOpenFile, onClose 
         }
     }
 
+    const revertAll = () => act(
+        `Revert all ${changes?.files.length ?? 0} file(s) changed in this session?`,
+        () => revertSession(sessionId),
+    );
+
+    const revertFile = (path: string) => act(
+        `Revert ${path} to its state before this session's first change?`,
+        () => revertSession(sessionId, [path]),
+    );
+
+    const acceptAll = () => act(
+        "Accept all changes? They will stay as they are and can no longer be reverted from JustAI.",
+        () => acceptSession(sessionId),
+    );
+
     return (
         <div className="diff-review">
             <div className="diff-header">
@@ -65,6 +81,14 @@ export function DiffReview({ sessionId, sessionTitle, busy, onOpenFile, onClose 
                 </div>
                 <div className="diff-actions">
                     <button className="secondary-button" onClick={load}>Refresh</button>
+                    <button
+                        className="allow-button"
+                        disabled={busy || reverting || !changes?.files.length}
+                        title={busy ? "Stop the agent first" : "Keep all changes and forget the session snapshot"}
+                        onClick={() => void acceptAll()}
+                    >
+                        Accept all
+                    </button>
                     <button
                         className="deny-button"
                         disabled={busy || reverting || !changes?.files.length}
@@ -105,9 +129,18 @@ export function DiffReview({ sessionId, sessionTitle, busy, onOpenFile, onClose 
                         {status && (
                             <div className="diff-file-header">
                                 <code>{status.path}</code>
-                                {status.status !== "deleted" && (
-                                    <button className="secondary-button" onClick={() => onOpenFile(status.path)}>Open in editor</button>
-                                )}
+                                <div className="diff-actions">
+                                    {status.status !== "deleted" && (
+                                        <button className="secondary-button" onClick={() => onOpenFile(status.path)}>Open in editor</button>
+                                    )}
+                                    <button
+                                        className="deny-button"
+                                        disabled={busy || reverting}
+                                        onClick={() => void revertFile(status.path)}
+                                    >
+                                        Revert file
+                                    </button>
+                                </div>
                             </div>
                         )}
 

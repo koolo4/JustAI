@@ -257,9 +257,9 @@ export class SessionManager {
     }
 
     /**
-     * Откатывает рабочую папку к состоянию до первой правки агента в сессии.
+     * Откатывает рабочую папку (или только `paths`) к состоянию до первой правки агента в сессии.
      */
-    public async revert(id: string): Promise<RevertResponse> {
+    public async revert(id: string, paths?: string[]): Promise<RevertResponse> {
         await this.load(id);
 
         if (!this.deps.snapshots?.available) {
@@ -270,10 +270,28 @@ export class SessionManager {
             throw new ConflictError("Stop the agent before reverting its changes.");
         }
 
-        const files = await this.deps.snapshots.revert(id);
+        const files = await this.deps.snapshots.revert(id, paths);
         await this.deps.onReverted?.(files);
 
         return { files };
+    }
+
+    /**
+     * Принять изменения сессии: снапшот забывается, откатить их больше нельзя.
+     * Следующая правка агента начнёт новый снапшот.
+     */
+    public async accept(id: string): Promise<void> {
+        await this.load(id);
+
+        if (!this.deps.snapshots?.available) {
+            throw new ConflictError("Accept is unavailable: git was not found on this computer.");
+        }
+
+        if (this.running.has(id)) {
+            throw new ConflictError("Stop the agent before accepting its changes.");
+        }
+
+        await this.deps.snapshots.discard(id);
     }
 
     public async stop(id: string): Promise<SessionSummary> {

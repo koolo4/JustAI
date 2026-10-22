@@ -40,6 +40,11 @@ const resolvePermissionSchema = z.object({
     note: z.string().max(2000).optional(),
 });
 
+const revertSchema = z.object({
+    /** Только эти файлы (пути из списка изменений). Нет — все. */
+    paths: z.array(z.string().min(1).max(1000)).min(1).max(1000).optional(),
+});
+
 const sendMessageSchema = z.object({
     text: z.string().trim().min(1, "Message text is required.").max(200_000),
     activeFile: z.string().max(1000).optional(),
@@ -115,7 +120,13 @@ export class AgentController {
     });
 
     public revertSession = handle(async (req, res) => {
-        res.json(await this.sessions.revert(sessionId(req)));
+        const input = parse(revertSchema, req.body ?? {});
+        res.json(await this.sessions.revert(sessionId(req), input.paths));
+    });
+
+    public acceptSession = handle(async (req, res) => {
+        await this.sessions.accept(sessionId(req));
+        res.status(204).end();
     });
 
     public stopSession = handle(async (req, res) => {

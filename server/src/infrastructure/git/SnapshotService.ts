@@ -111,9 +111,10 @@ export class SnapshotService {
 
     /**
      * Возвращает файлы к состоянию снапшота: изменённые и удалённые восстанавливаются,
-     * созданные после снапшота — удаляются. Возвращает список затронутых файлов.
+     * созданные после снапшота — удаляются. `paths` — только эти файлы (пути через «/»).
+     * Возвращает список затронутых файлов.
      */
-    public revert(sessionId: string): Promise<SnapshotChange[]> {
+    public revert(sessionId: string, paths?: string[]): Promise<SnapshotChange[]> {
         return this.serialize(async () => {
             await this.init();
 
@@ -124,9 +125,10 @@ export class SnapshotService {
             }
 
             const current = await this.captureTree("current");
+            const selected = paths ? new Set(paths) : undefined;
             const changes = parseNameStatus(
                 await this.shadow(["diff-tree", "-r", "--no-renames", "--name-status", "-z", snapshot, current]),
-            );
+            ).filter(change => !selected || selected.has(change.path));
 
             for (const change of changes) {
                 const absolute = path.join(this.workspaceRoot, ...change.path.split("/"));

@@ -21,7 +21,8 @@
 | POST | `/api/agent/sessions/:id/stop` | `{ session }` после остановки цикла |
 | POST | `/api/agent/sessions/:id/permissions/:requestId` | `204`; body `{ decision: "allow" \| "allow_always" \| "deny", note? }`; `404`, если запрос уже не ждёт ответа |
 | GET | `/api/agent/sessions/:id/changes` | `{ available, files: [{ path, status }], diff }` — изменения с первой правки агента |
-| POST | `/api/agent/sessions/:id/revert` | `{ files }` — откат к снапшоту; `409`, если агент работает или нет git |
+| POST | `/api/agent/sessions/:id/revert` | Тело `{ paths? }` (без него — все файлы). `{ files }` — откат к снапшоту; `409`, если агент работает или нет git |
+| POST | `/api/agent/sessions/:id/accept` | `204` — принять изменения: снапшот забывается, откат больше невозможен; `409`, если агент работает или нет git |
 
 Ход работы агента приходит по WebSocket (`ws://localhost:4302/?token=<token>`) событиями
 `AgentEvent` из `packages/shared/src/events.ts`: `session.status`, `assistant.delta`,
