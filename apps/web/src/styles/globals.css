@@ -48,6 +48,70 @@ button {
     font-size: 18px;
 }
 
+.workspace-picker {
+    position: relative;
+    margin-right: auto;
+    margin-left: 16px;
+}
+
+.workspace-current {
+    padding: 4px 10px;
+    color: #d6dde6;
+    background: #1a2028;
+    border: 1px solid #2c3540;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.workspace-current:disabled { cursor: default; opacity: .8; }
+
+.workspace-popover {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 20;
+    width: min(520px, 90vw);
+    padding: 12px;
+    background: #151a20;
+    border: 1px solid #2c3540;
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .4);
+}
+
+.workspace-root { font-size: 12px; word-break: break-all; margin-bottom: 8px; }
+
+.workspace-form { display: flex; gap: 6px; }
+
+.workspace-form input {
+    flex: 1;
+    min-width: 0;
+    padding: 6px 8px;
+    color: inherit;
+    background: #0f1318;
+    border: 1px solid #2c3540;
+    border-radius: 6px;
+}
+
+.workspace-recent-title { font-size: 12px; margin: 10px 0 4px; }
+
+.workspace-recent { list-style: none; margin: 0; padding: 0; }
+
+.workspace-recent button {
+    width: 100%;
+    padding: 5px 6px;
+    overflow: hidden;
+    color: #c5ced8;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    background: none;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.workspace-recent button:hover { background: #1f2630; }
+
 .layout {
     display: grid;
     grid-template-columns: 260px minmax(0, 1fr) 420px;

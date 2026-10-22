@@ -61,6 +61,19 @@ export interface RevertResponse {
     files: FileChange[];
 }
 
+/** Текущая папка проекта и недавние. */
+export interface WorkspaceInfo {
+    root: string;
+    name: string;
+    recent: string[];
+    /** false — папка задана JUSTAI_WORKSPACE, переключение из интерфейса выключено. */
+    switchable: boolean;
+}
+
+export interface OpenWorkspaceRequest {
+    path: string;
+}
+
 export interface SessionListResponse {
     sessions: SessionSummary[];
 }

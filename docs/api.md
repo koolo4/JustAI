@@ -22,6 +22,8 @@
 | POST | `/api/agent/sessions/:id/permissions/:requestId` | `204`; body `{ decision: "allow" \| "allow_always" \| "deny", note? }`; `404`, если запрос уже не ждёт ответа |
 | GET | `/api/agent/sessions/:id/changes` | `{ available, files: [{ path, status }], diff }` — изменения с первой правки агента |
 | POST | `/api/agent/sessions/:id/revert` | Тело `{ paths? }` (без него — все файлы). `{ files }` — откат к снапшоту; `409`, если агент работает или нет git |
+| GET | `/api/workspace/info` | `{ root, name, recent, switchable }` — текущая папка проекта и недавние |
+| POST | `/api/workspace/open` | Тело `{ path }` (абсолютный путь к папке). `202` и новая информация, затем сервер перезапускается на этой папке (токен прежний); `400` — папка не найдена/недопустима; `409` — агент работает |
 | POST | `/api/agent/sessions/:id/accept` | `204` — принять изменения: снапшот забывается, откат больше невозможен; `409`, если агент работает или нет git |
 
 Ход работы агента приходит по WebSocket (`ws://localhost:4302/?token=<token>`) событиями

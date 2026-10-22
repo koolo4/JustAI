@@ -4,6 +4,7 @@ import { AgentChat, type ReviewRequest } from "../components/AgentChat";
 import { DiffReview } from "../components/diff/DiffReview";
 import { FileTree } from "../components/FileTree";
 import { PanelBoundary } from "../components/PanelBoundary";
+import { WorkspacePicker } from "../components/WorkspacePicker";
 import { useIDEContext } from "../context/useIDEContext";
 import { CodeEditor } from "../editor/CodeEditor";
 import { useEditorTabs } from "../editor/useEditorTabs";
@@ -84,6 +85,7 @@ export function App() {
         <div className="app-shell">
             <header className="topbar">
                 <h1>JustAI</h1>
+                <WorkspacePicker />
                 <span className={`connection ${socketStatus}`}>
                     {socketStatus === "open" ? "● connected" : "○ connecting…"}
                 </span>

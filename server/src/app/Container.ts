@@ -96,10 +96,11 @@ export class Container {
     private readonly configService: ConfigService;
     private readonly logger: ILogger;
 
-    constructor() {
+    constructor(options: { workspaceRoot?: string; token?: string } = {}) {
 
         this.workspaceRoot =
-            resolveWorkspaceRoot();
+            options.workspaceRoot ??
+            (process.env.JUSTAI_WORKSPACE ? path.resolve(process.env.JUSTAI_WORKSPACE) : resolveInstallRoot());
 
         this.configService =
             new ConfigService();
@@ -113,6 +114,7 @@ export class Container {
         this.accessGuard =
             new AccessGuard({
                 token:
+                    options.token ||
                     process.env.JUSTAI_TOKEN ||
                     AccessGuard.generateToken(),
                 allowedOrigins:
@@ -356,17 +358,23 @@ export class Container {
             .list()
             .map(tool => tool.name);
     }
+
+    /** Остановить всё, что держит папку проекта: процессы агента, браузер, сессии. */
+    public async dispose(): Promise<void> {
+        await this.sessionManager.stopAll();
+
+        await Promise.allSettled([
+            this.processManager.killAll(),
+            this.browserService.closeAll(),
+        ]);
+    }
 }
 
 /**
- * JUSTAI_WORKSPACE задаёт папку проекта явно; иначе — корень репозитория JustAI
- * (родитель папки server, если сервер запущен из неё).
+ * Папка установки JustAI: корень репозитория (родитель папки server, если сервер запущен из неё).
+ * Проект по умолчанию; папку проекта выбирает WorkspaceSettings.
  */
-function resolveWorkspaceRoot(): string {
-    if (process.env.JUSTAI_WORKSPACE) {
-        return path.resolve(process.env.JUSTAI_WORKSPACE);
-    }
-
+export function resolveInstallRoot(): string {
     const currentDirectory =
         process.cwd();
 

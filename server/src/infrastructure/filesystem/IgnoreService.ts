@@ -5,6 +5,8 @@ export class IgnoreService {
 
     private readonly ignored = new Set<string>([
         '.git',
+        // Состояние JustAI (токен, сессии) — не часть проекта.
+        '.justai',
         'node_modules',
         'dist',
         'build',

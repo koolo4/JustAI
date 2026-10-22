@@ -64,6 +64,18 @@ export class WebSocketConnectionManager {
 
     }
 
+    /** Закрыть все подключения (перезапуск сервера на другой папке проекта). */
+    public close(): void {
+
+        for (const client of this.clients) {
+            client.close(1012, 'Workspace changed');
+        }
+
+        this.clients.clear();
+        this.server?.close();
+
+    }
+
     public getClientCount(): number {
 
         return this.clients.size;

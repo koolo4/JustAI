@@ -306,6 +306,22 @@ export class SessionManager {
         return session.summary;
     }
 
+    /** Работает ли сейчас хотя бы один агент. */
+    public get busy(): boolean {
+        return this.running.size > 0;
+    }
+
+    /** Остановить все работающие сессии и дождаться их завершения. */
+    public async stopAll(): Promise<void> {
+        const runs = [...this.running.values()];
+
+        for (const run of runs) {
+            run.controller.abort();
+        }
+
+        await Promise.allSettled(runs.map(run => run.done));
+    }
+
     /**
      * delegate_task: выполнить задачу планировщика исполнителем в рамках той же сессии.
      */

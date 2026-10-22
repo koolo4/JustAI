@@ -7,12 +7,24 @@ import http from 'node:http';
 
 import { createAgentRouter } from '../modules/agent/AgentRoutes.js';
 
+import type { WorkspaceInfo } from '@justai/shared';
+
 import { Container } from './Container.js';
 
+import { BadRequestError } from '../core/errors/BadRequestError.js';
 import { ErrorHandlerMiddleware } from '../core/middleware/ErrorHandlerMiddleware.js';
 
 import { createWorkspaceRouter } from '../modules/workspace/WorkspaceRoutes.js';
 import { createIntegrationsRouter } from "../modules/integrations/index.js";
+
+/** Смена папки проекта: решает App, потому что для неё пересоздаётся контейнер. */
+export interface WorkspaceHooks {
+    info(): WorkspaceInfo;
+    /** Проверить и запомнить папку (ошибка — 400/409). */
+    select(target: string): WorkspaceInfo;
+    /** Перезапуститься на выбранной папке; вызывается после отправки ответа. */
+    restart(): void;
+}
 
 export class Server {
 
@@ -20,8 +32,11 @@ export class Server {
 
     private readonly errorHandler: ErrorHandlerMiddleware;
 
+    private httpServer?: http.Server;
+
     constructor(
         private readonly container: Container,
+        private readonly workspace?: WorkspaceHooks,
     ) {
 
         this.app = express();
@@ -90,6 +105,40 @@ export class Server {
                 this.container.agentController,
             ),
         );
+
+        const hooks =
+            this.workspace;
+
+        if (hooks) {
+
+            this.app.get(
+                '/api/workspace/info',
+                (_req, res) => {
+                    res.json(hooks.info());
+                },
+            );
+
+            this.app.post(
+                '/api/workspace/open',
+                (req, res, next) => {
+                    try {
+                        const target = (req.body as { path?: unknown } | undefined)?.path;
+
+                        if (typeof target !== 'string') {
+                            throw new BadRequestError('Pass the folder path as "path".');
+                        }
+
+                        const info = hooks.select(target);
+                        res.on('finish', () => hooks.restart());
+                        res.status(202).json(info);
+                    }
+                    catch (error) {
+                        next(error);
+                    }
+                },
+            );
+
+        }
 
         const workspaceRouter =
             createWorkspaceRouter(
@@ -181,6 +230,9 @@ export class Server {
         const httpServer =
             this.createHttpServer();
 
+        this.httpServer =
+            httpServer;
+
         httpServer.listen(
             port,
             host,
@@ -192,6 +244,27 @@ export class Server {
 
             },
         );
+
+    }
+
+    /** Закрыть HTTP и WebSocket, чтобы порт освободился для нового контейнера. */
+    public async stop(): Promise<void> {
+
+        const httpServer =
+            this.httpServer;
+
+        if (!httpServer) {
+            return;
+        }
+
+        this.container.webSocketConnectionManager.close();
+
+        await new Promise<void>(resolve => {
+            httpServer.close(() => resolve());
+            httpServer.closeAllConnections();
+        });
+
+        this.httpServer = undefined;
 
     }
 
