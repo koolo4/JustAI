@@ -182,3 +182,17 @@ Consequences:
 - delegate_task needs no approval itself; every executor action goes through the planner session's permission mode and restore point.
 - Ollama must run with a large context (OLLAMA_CONTEXT_LENGTH=32768), otherwise prompts are truncated silently.
 - Tool calling of small models is unreliable; the provider recognizes calls written as text and retries malformed ones.
+## ADR-007
+Date: 22.10.2026
+
+Title:
+Settings and API keys from the interface
+
+Decision:
+- Settings edited in the interface are stored in `.justai/settings.json` of the JustAI install folder and override `server/.env`. Only a whitelist of variables (providers, keys, models, reserves, executor, proxy) can be changed; generated from the provider presets.
+- API keys are stored as plain text in that file (mode 600), the same protection level as `server/.env`. The OS keychain (keytar) was rejected: the package is archived and needs a native build.
+- The server never returns a key: only "set" and the last 4 characters. An empty key field in the interface means "keep".
+- Saving rebuilds the server container in the same process (as switching the project folder); refused with 409 while an agent is running.
+
+Consequences:
+- `.justai/` must stay out of git and closed to agent file tools (as before). `run_command` can still read the file, as it could read `server/.env`; child processes do not inherit secret variables.

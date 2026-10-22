@@ -74,6 +74,30 @@ export interface OpenWorkspaceRequest {
     path: string;
 }
 
+/** Настройка из интерфейса (переменная окружения сервера). */
+export interface SettingField {
+    key: string;
+    label: string;
+    group: string;
+    /** provider — выбор из списка провайдеров; secret — значение никогда не отдаётся целиком. */
+    kind: "text" | "number" | "secret" | "provider";
+    placeholder?: string;
+    /** Для secret — маска вида «••••abcd». */
+    value: string;
+    isSet: boolean;
+    /** ui — задано в интерфейсе, env — в server/.env, default — не задано. */
+    source: "ui" | "env" | "default";
+}
+
+export interface SettingsResponse {
+    fields: SettingField[];
+}
+
+export interface UpdateSettingsRequest {
+    /** null — убрать значение из интерфейса (вернётся значение из server/.env). */
+    values: Record<string, string | null>;
+}
+
 export interface SessionListResponse {
     sessions: SessionSummary[];
 }

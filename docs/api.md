@@ -22,6 +22,8 @@
 | POST | `/api/agent/sessions/:id/permissions/:requestId` | `204`; body `{ decision: "allow" \| "allow_always" \| "deny", note? }`; `404`, если запрос уже не ждёт ответа |
 | GET | `/api/agent/sessions/:id/changes` | `{ available, files: [{ path, status }], diff }` — изменения с первой правки агента |
 | POST | `/api/agent/sessions/:id/revert` | Тело `{ paths? }` (без него — все файлы). `{ files }` — откат к снапшоту; `409`, если агент работает или нет git |
+| GET | `/api/settings` | `{ fields }` — настраиваемые переменные; ключи только маской `••••abcd` |
+| PUT | `/api/settings` | Тело `{ values: { NAME: "value" \| null } }` (`null` — вернуть значение из `server/.env`). `202`, затем сервер пересобирается с новыми настройками; `400` — неизвестная переменная или неверное значение; `409` — агент работает |
 | GET | `/api/workspace/info` | `{ root, name, recent, switchable }` — текущая папка проекта и недавние |
 | POST | `/api/workspace/open` | Тело `{ path }` (абсолютный путь к папке). `202` и новая информация, затем сервер перезапускается на этой папке (токен прежний); `400` — папка не найдена/недопустима; `409` — агент работает |
 | POST | `/api/agent/sessions/:id/accept` | `204` — принять изменения: снапшот забывается, откат больше невозможен; `409`, если агент работает или нет git |

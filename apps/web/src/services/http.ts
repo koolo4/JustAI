@@ -56,6 +56,30 @@ export async function apiFetch(
     return send();
 }
 
+/** Текст ошибки API ({ error: { message } }) или статус. */
+export async function readApiError(response: Response): Promise<string> {
+    const body = await response.json().catch(() => null) as { error?: { message?: string } } | null;
+    return body?.error?.message ?? `${response.status} ${response.statusText}`;
+}
+
+/** Ждём, пока сервер поднимется после перезапуска (смена папки или настроек). */
+export async function waitForServer(): Promise<void> {
+    for (let attempt = 0; attempt < 60; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        try {
+            if ((await fetch(`${API_URL}/health`)).ok) {
+                return;
+            }
+        }
+        catch {
+            // сервер ещё перезапускается
+        }
+    }
+
+    throw new Error("The server did not come back after the restart.");
+}
+
 /**
  * URL WebSocket с токеном: браузерный WebSocket не умеет ставить заголовки.
  */

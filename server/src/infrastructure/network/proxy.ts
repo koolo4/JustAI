@@ -1,4 +1,4 @@
-import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
+import { Agent, EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 
 /** Локальные адреса (Ollama, LM Studio, сам сервер) всегда идут мимо прокси. */
 const LOCAL_HOSTS = ["localhost", "127.0.0.1", "::1", "[::1]"];
@@ -37,13 +37,14 @@ export function readProxySettings(env: NodeJS.ProcessEnv): ProxySettings | undef
 export function configureProxy(env: NodeJS.ProcessEnv): ProxySettings | undefined {
     const settings = readProxySettings(env);
 
-    if (settings) {
-        setGlobalDispatcher(new EnvHttpProxyAgent({
+    // Без прокси — обычный агент: настройку можно выключить из интерфейса без перезапуска процесса.
+    setGlobalDispatcher(settings
+        ? new EnvHttpProxyAgent({
             httpProxy: settings.url,
             httpsProxy: settings.url,
             noProxy: settings.noProxy,
-        }));
-    }
+        })
+        : new Agent());
 
     return settings;
 }

@@ -2,30 +2,7 @@ import { useEffect, useState } from "react";
 
 import type { WorkspaceInfo } from "@justai/shared";
 
-import { API_URL, apiFetch } from "../services/http";
-
-async function readError(response: Response): Promise<string> {
-    const body = await response.json().catch(() => null) as { error?: { message?: string } } | null;
-    return body?.error?.message ?? `${response.status} ${response.statusText}`;
-}
-
-/** Ждём, пока сервер поднимется на новой папке. */
-async function waitForServer(): Promise<void> {
-    for (let attempt = 0; attempt < 60; attempt++) {
-        await new Promise(resolve => setTimeout(resolve, 500));
-
-        try {
-            if ((await fetch(`${API_URL}/health`)).ok) {
-                return;
-            }
-        }
-        catch {
-            // сервер ещё перезапускается
-        }
-    }
-
-    throw new Error("The server did not come back after switching folders.");
-}
+import { apiFetch, readApiError as readError, waitForServer } from "../services/http";
 
 /**
  * Папка проекта в верхней панели: показать текущую, открыть другую или недавнюю.

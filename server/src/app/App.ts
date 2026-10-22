@@ -5,7 +5,10 @@ import type { WorkspaceInfo } from '@justai/shared';
 
 import { Container, resolveInstallRoot } from './Container.js';
 import { Server } from './Server.js';
+import { SettingsStore } from './SettingsStore.js';
 import { WorkspaceSettings } from './WorkspaceSettings.js';
+
+import { configureProxy } from '../infrastructure/network/proxy.js';
 
 import { ConflictError } from '../core/errors/ConflictError.js';
 import {
@@ -23,6 +26,9 @@ export class App {
     private readonly settings =
         new WorkspaceSettings(resolveInstallRoot());
 
+    private readonly config =
+        new SettingsStore(resolveInstallRoot());
+
     private container: Container;
 
     private server: Server;
@@ -31,6 +37,7 @@ export class App {
 
     constructor() {
 
+        this.applyConfig();
         this.container = new Container({ workspaceRoot: this.settings.currentRoot() });
         this.server = this.createServer();
 
@@ -63,12 +70,34 @@ export class App {
                 this.settings.open(target);
                 return this.info();
             },
+            settings: () => this.config.view(),
+            updateSettings: values => {
+                if (this.container.sessionManager.busy) {
+                    throw new ConflictError('Stop the agent before changing settings.');
+                }
+
+                this.config.update(values);
+                return this.config.view();
+            },
             restart: () => {
                 this.restarting ??= this.switchWorkspace()
                     .catch(error => console.error('Could not switch the project folder:', error))
                     .finally(() => { this.restarting = undefined; });
             },
         });
+
+    }
+
+    /** Настройки из интерфейса поверх server/.env, затем прокси (он зависит от настроек). */
+    private applyConfig(): void {
+
+        this.config.apply();
+
+        const proxy = configureProxy(process.env);
+
+        if (proxy) {
+            console.log(`Outgoing requests go through proxy ${proxy.url} (except ${proxy.noProxy})`);
+        }
 
     }
 
@@ -95,6 +124,7 @@ export class App {
         await this.server.stop();
         await this.container.dispose();
 
+        this.applyConfig();
         this.container = new Container({ workspaceRoot: this.settings.currentRoot(), token });
         this.server = this.createServer();
 

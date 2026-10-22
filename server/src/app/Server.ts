@@ -7,7 +7,7 @@ import http from 'node:http';
 
 import { createAgentRouter } from '../modules/agent/AgentRoutes.js';
 
-import type { WorkspaceInfo } from '@justai/shared';
+import type { SettingsResponse, WorkspaceInfo } from '@justai/shared';
 
 import { Container } from './Container.js';
 
@@ -17,12 +17,15 @@ import { ErrorHandlerMiddleware } from '../core/middleware/ErrorHandlerMiddlewar
 import { createWorkspaceRouter } from '../modules/workspace/WorkspaceRoutes.js';
 import { createIntegrationsRouter } from "../modules/integrations/index.js";
 
-/** Смена папки проекта: решает App, потому что для неё пересоздаётся контейнер. */
+/** Смена папки проекта и настроек: решает App, потому что для них пересоздаётся контейнер. */
 export interface WorkspaceHooks {
     info(): WorkspaceInfo;
     /** Проверить и запомнить папку (ошибка — 400/409). */
     select(target: string): WorkspaceInfo;
-    /** Перезапуститься на выбранной папке; вызывается после отправки ответа. */
+    settings(): SettingsResponse;
+    /** Проверить и сохранить настройки (ошибка — 400/409). */
+    updateSettings(values: Record<string, string | null>): SettingsResponse;
+    /** Перезапуститься с новой папкой/настройками; вызывается после отправки ответа. */
     restart(): void;
 }
 
@@ -131,6 +134,36 @@ export class Server {
                         const info = hooks.select(target);
                         res.on('finish', () => hooks.restart());
                         res.status(202).json(info);
+                    }
+                    catch (error) {
+                        next(error);
+                    }
+                },
+            );
+
+            this.app.get(
+                '/api/settings',
+                (_req, res) => {
+                    res.json(hooks.settings());
+                },
+            );
+
+            this.app.put(
+                '/api/settings',
+                (req, res, next) => {
+                    try {
+                        const values = (req.body as { values?: unknown } | undefined)?.values;
+
+                        if (
+                            !values || typeof values !== 'object' || Array.isArray(values) ||
+                            !Object.values(values).every(value => value === null || typeof value === 'string')
+                        ) {
+                            throw new BadRequestError('Pass { values: { NAME: "value" | null } }.');
+                        }
+
+                        const result = hooks.updateSettings(values as Record<string, string | null>);
+                        res.on('finish', () => hooks.restart());
+                        res.status(202).json(result);
                     }
                     catch (error) {
                         next(error);

@@ -4,6 +4,7 @@ import { AgentChat, type ReviewRequest } from "../components/AgentChat";
 import { DiffReview } from "../components/diff/DiffReview";
 import { FileTree } from "../components/FileTree";
 import { PanelBoundary } from "../components/PanelBoundary";
+import { SettingsPanel } from "../components/SettingsPanel";
 import { WorkspacePicker } from "../components/WorkspacePicker";
 import { useIDEContext } from "../context/useIDEContext";
 import { CodeEditor } from "../editor/CodeEditor";
@@ -23,6 +24,7 @@ export function App() {
 
     const [tree, setTree] = useState<WorkspaceNode[]>([]);
     const [review, setReview] = useState<ReviewRequest | null>(null);
+    const [settingsOpen, setSettingsOpen] = useState(false);
     const editor = useEditorTabs();
 
     function refreshTree() {
@@ -86,6 +88,9 @@ export function App() {
             <header className="topbar">
                 <h1>JustAI</h1>
                 <WorkspacePicker />
+                <button className="secondary-button topbar-settings" onClick={() => setSettingsOpen(open => !open)}>
+                    ⚙ Settings
+                </button>
                 <span className={`connection ${socketStatus}`}>
                     {socketStatus === "open" ? "● connected" : "○ connecting…"}
                 </span>
@@ -100,7 +105,9 @@ export function App() {
 
                 <section className="panel center">
                     <PanelBoundary name="Editor">
-                    {review ? (
+                    {settingsOpen ? (
+                        <SettingsPanel onClose={() => setSettingsOpen(false)} />
+                    ) : review ? (
                         <DiffReview
                             sessionId={review.sessionId}
                             sessionTitle={review.title}
