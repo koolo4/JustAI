@@ -94,7 +94,7 @@ export function App() {
                     ⌨ Terminal
                 </button>
                 <button className="secondary-button topbar-settings" onClick={() => setSettingsOpen(open => !open)}>
-                    ⚙ Settings
+                    ⚙ Настройки
                 </button>
                 <span className={`connection ${socketStatus}`}>
                     {socketStatus === "open" ? "● connected" : "○ connecting…"}

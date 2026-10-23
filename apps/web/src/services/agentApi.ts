@@ -117,6 +117,16 @@ export function revertSession(id: string, paths?: string[]): Promise<RevertRespo
     });
 }
 
+/** Удалить сессию (историю чата). Изменения в файлах проекта остаются. */
+export async function deleteSession(id: string): Promise<void> {
+    const response = await apiFetch(`/agent/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+
+    if (!response.ok) {
+        const body = await response.json().catch(() => null) as Partial<ApiErrorBody> | null;
+        throw new Error(body?.error?.message ?? `${response.status} ${response.statusText}`);
+    }
+}
+
 /** Принять изменения сессии: откатить их после этого будет нельзя. */
 export async function acceptSession(id: string): Promise<void> {
     const response = await apiFetch(`/agent/sessions/${encodeURIComponent(id)}/accept`, { method: "POST" });

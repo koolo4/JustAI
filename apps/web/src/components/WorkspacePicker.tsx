@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import type { WorkspaceInfo } from "@justai/shared";
 
 import { apiFetch, readApiError as readError, waitForServer } from "../services/http";
+import { socketBus } from "../services/socket";
 
 /**
  * Папка проекта в верхней панели: показать текущую, открыть другую или недавнюю.
@@ -19,6 +20,28 @@ export function WorkspacePicker() {
             .then(async response => response.ok ? setInfo(await response.json() as WorkspaceInfo) : setError(await readError(response)))
             .catch(reason => setError(String(reason)));
     }, []);
+
+    // Папку могли сменить в другой вкладке или через API: после переподключения сверяемся с сервером.
+    // Иначе открытая сессия и дерево файлов остаются от старого проекта, а ответы агента не видны.
+    useEffect(() => {
+        let wasOpen = true;
+
+        return socketBus.onStatus(status => {
+            if (status === "open" && !wasOpen && info) {
+                apiFetch("/workspace/info")
+                    .then(async response => {
+                        const current = response.ok ? await response.json() as WorkspaceInfo : null;
+
+                        if (current && current.root !== info.root) {
+                            window.location.reload();
+                        }
+                    })
+                    .catch(() => undefined);
+            }
+
+            wasOpen = status === "open";
+        });
+    }, [info]);
 
     async function openFolder(target: string) {
         setError("");

@@ -51,9 +51,9 @@ describe("SettingsStore", () => {
     it("rejects unknown keys and invalid values", () => {
         const store = new SettingsStore(install.root, {});
 
-        expect(() => store.update({ PATH: "C:\\evil" })).toThrow(/cannot be changed/);
-        expect(() => store.update({ GROQ_CONTEXT: "-5" })).toThrow(/positive number/);
-        expect(() => store.update({ GROQ_MODEL: "a\nINJECTED=1" })).toThrow(/line breaks/);
+        expect(() => store.update({ PATH: "C:\\evil" })).toThrow(/нельзя менять/);
+        expect(() => store.update({ GROQ_CONTEXT: "-5" })).toThrow(/положительное число/);
+        expect(() => store.update({ GROQ_MODEL: "a\nINJECTED=1" })).toThrow(/переносы строк/);
     });
 
     it("lists editable fields for every provider and both reserves", () => {

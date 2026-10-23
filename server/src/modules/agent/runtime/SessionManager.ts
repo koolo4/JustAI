@@ -296,6 +296,24 @@ export class SessionManager {
         await this.deps.snapshots.discard(id);
     }
 
+    /**
+     * Удалить сессию: файл истории и её точку отката (изменения в файлах проекта остаются как есть).
+     */
+    public async delete(id: string): Promise<void> {
+        await this.load(id);
+
+        if (this.running.has(id)) {
+            throw new ConflictError("Stop the agent before deleting this session.");
+        }
+
+        if (this.deps.snapshots?.available) {
+            await this.deps.snapshots.discard(id).catch(() => undefined);
+        }
+
+        this.cache.delete(id);
+        await this.deps.store.delete(id);
+    }
+
     public async stop(id: string): Promise<SessionSummary> {
         const session = await this.load(id);
         const run = this.running.get(id);

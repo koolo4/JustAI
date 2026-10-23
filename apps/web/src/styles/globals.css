@@ -997,6 +997,25 @@ button {
 
 .session-meta { white-space: nowrap; }
 
+.session-delete {
+    flex: none;
+    padding: 0 6px;
+    color: #8b97a5;
+    font-size: 15px;
+    line-height: 1;
+    background: none;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    opacity: 0;
+}
+
+.session-list li:hover .session-delete,
+.session-delete:focus-visible { opacity: 1; }
+
+.session-delete:hover:not(:disabled) { color: #f56565; background: #2a1d20; }
+.session-delete:disabled { cursor: not-allowed; }
+
 .session-dot {
     width: 8px;
     height: 8px;

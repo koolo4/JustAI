@@ -5,7 +5,7 @@ import type { AgentEvent, Message, ToolResultBlock } from "@justai/shared";
 
 import { MockProvider, type MockScript } from "../../../src/modules/agent/providers/MockProvider.js";
 import { ModelOutputError } from "../../../src/modules/agent/providers/ModelProvider.js";
-import { AgentLoop, createMessage, MAX_TOOL_OUTPUT_CHARS } from "../../../src/modules/agent/runtime/AgentLoop.js";
+import { AgentLoop, asksToBuild, createMessage, MAX_TOOL_OUTPUT_CHARS } from "../../../src/modules/agent/runtime/AgentLoop.js";
 import { DEFAULT_BUDGET, type BudgetLimits } from "../../../src/modules/agent/runtime/Budget.js";
 import { defineTool, ToolError, type Tool } from "../../../src/modules/agent/tools/Tool.js";
 
@@ -141,6 +141,35 @@ describe("AgentLoop", () => {
 
         expect(toolResults(saved[1]).map(result => result.content)).toEqual(["echo:a", "echo:b"]);
         expect(events.filter(event => event.type === "tool.started").map(event => (event as { name: string }).name)).toEqual(["echo", "echo"]);
+    });
+
+    it("recognises requests to build something", () => {
+        expect(asksToBuild("мне нужен сайт по дота 2 где нужно угадывать героев - придумай несколько режимов")).toBe(true);
+        expect(asksToBuild("создай файл tmp/a.txt")).toBe(true);
+        expect(asksToBuild("Build a todo app")).toBe(true);
+        expect(asksToBuild("объясни, как работает этот код")).toBe(false);
+        expect(asksToBuild("дай только идеи для сайта, без кода")).toBe(false);
+        expect(asksToBuild("go")).toBe(false);
+    });
+
+    it("sends a model that only described the work back to build it, once", async () => {
+        const writer = defineTool({ name: "write_file", description: "w", inputSchema: z.object({ path: z.string() }), kind: "write", run: async () => "ok" });
+        const { loop, saved, provider } = setup([
+            { text: "Ideas: mode 1, mode 2, neon style." },
+            { toolCalls: [{ name: "write_file", input: { path: "index.html" } }] },
+            { text: "Built index.html." },
+        ], { tools: [writer] });
+
+        const result = await loop.run([createMessage("user", [{ type: "text", text: "мне нужен сайт-игра, придумай режимы" }])]);
+
+        expect(result.status).toBe("completed");
+        expect(provider.requests).toHaveLength(3);
+        expect(saved[1]!.content).toEqual([{ type: "text", text: expect.stringContaining("asked you to build this") }]);
+
+        // Второй раз не подталкиваем: ответ текстом после правок — нормальное завершение.
+        const again = setup([{ text: "Ideas only." }, { text: "Still ideas." }], { tools: [writer] });
+        await again.loop.run([createMessage("user", [{ type: "text", text: "сделай сайт" }])]);
+        expect(again.provider.requests).toHaveLength(2);
     });
 
     it("does not treat an empty reply as finished", async () => {

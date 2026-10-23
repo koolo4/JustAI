@@ -42,7 +42,7 @@ function reservePreset(n: 1 | 2): CompatiblePreset {
 export const COMPATIBLE_PRESETS: CompatiblePreset[] = [
     {
         id: "ollama",
-        label: "Ollama (local)",
+        label: "Ollama (локально)",
         prefix: "OLLAMA",
         baseURL: "http://127.0.0.1:11434/v1",
         keyEnv: [],
@@ -52,7 +52,7 @@ export const COMPATIBLE_PRESETS: CompatiblePreset[] = [
     },
     {
         id: "lmstudio",
-        label: "LM Studio (local)",
+        label: "LM Studio (локально)",
         prefix: "LMSTUDIO",
         baseURL: "http://127.0.0.1:1234/v1",
         keyEnv: [],

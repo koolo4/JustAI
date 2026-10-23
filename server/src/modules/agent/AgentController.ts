@@ -129,6 +129,11 @@ export class AgentController {
         res.status(204).end();
     });
 
+    public deleteSession = handle(async (req, res) => {
+        await this.sessions.delete(sessionId(req));
+        res.status(204).end();
+    });
+
     public stopSession = handle(async (req, res) => {
         const session = await this.sessions.stop(sessionId(req));
         res.json({ session });

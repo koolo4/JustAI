@@ -10,9 +10,9 @@ interface Props {
 }
 
 const SOURCE_LABEL: Record<SettingField["source"], string> = {
-    ui: "set here",
-    env: "from server/.env",
-    default: "not set",
+    ui: "задано здесь",
+    env: "из server/.env",
+    default: "не задано",
 };
 
 /**
@@ -95,25 +95,25 @@ export function SettingsPanel({ onClose }: Props) {
         <div className="settings-panel">
             <div className="diff-header">
                 <div>
-                    <strong>Settings</strong>
-                    <span className="muted"> — stored in .justai/settings.json, override server/.env</span>
+                    <strong>Настройки</strong>
+                    <span className="muted"> — хранятся в .justai/settings.json и перекрывают server/.env</span>
                 </div>
                 <div className="diff-actions">
                     <input
                         className="settings-filter"
-                        placeholder="Filter"
+                        placeholder="Поиск"
                         value={filter}
                         onChange={event => setFilter(event.target.value)}
                     />
                     <button className="allow-button" disabled={!dirty || saving} onClick={() => void save()}>
-                        {saving ? "Applying…" : dirty ? `Save (${dirty})` : "Save"}
+                        {saving ? "Применяю…" : dirty ? `Сохранить (${dirty})` : "Сохранить"}
                     </button>
-                    <button className="secondary-button" onClick={onClose} disabled={saving}>Close</button>
+                    <button className="secondary-button" onClick={onClose} disabled={saving}>Закрыть</button>
                 </div>
             </div>
 
             {error && <div className="error">{error}</div>}
-            {!settings && !error && <div className="muted settings-loading">Loading settings…</div>}
+            {!settings && !error && <div className="muted settings-loading">Загрузка настроек…</div>}
 
             <div className="settings-body">
                 <McpStatus />
@@ -139,6 +139,12 @@ export function SettingsPanel({ onClose }: Props) {
     );
 }
 
+const MCP_STATUS: Record<McpInfo["servers"][number]["status"], string> = {
+    connected: "подключён",
+    failed: "ошибка",
+    disabled: "выключен",
+};
+
 interface McpInfo {
     configFiles: string[];
     servers: Array<{ name: string; status: "connected" | "failed" | "disabled"; tools: string[]; error?: string }>;
@@ -160,21 +166,21 @@ function McpStatus() {
 
     return (
         <section className="settings-group">
-            <h3>MCP servers</h3>
+            <h3>MCP-серверы</h3>
             {info.servers.length === 0 && (
                 <p className="muted setting-hint">
-                    No MCP servers. Describe them in <code>{info.configFiles.at(-1)}</code> as
-                    {" "}<code>{"{ \"mcpServers\": { \"name\": { \"command\": \"npx\", \"args\": [\"…\"] } } }"}</code> and restart the server.
+                    MCP-серверов нет. Опишите их в <code>{info.configFiles.at(-1)}</code> в формате
+                    {" "}<code>{"{ \"mcpServers\": { \"name\": { \"command\": \"npx\", \"args\": [\"…\"] } } }"}</code> и перезапустите сервер.
                 </p>
             )}
             {info.servers.map(server => (
                 <div key={server.name} className="setting-row">
                     <span className="setting-label">{server.name}</span>
                     <span className={server.status === "failed" ? "error-text" : "muted"}>
-                        {server.status === "connected" ? `${server.tools.length} tool(s)` : server.status}
+                        {server.status === "connected" ? `инструментов: ${server.tools.length}` : MCP_STATUS[server.status]}
                         {server.error ? `: ${server.error}` : ""}
                     </span>
-                    <span className="setting-meta muted">{server.status}</span>
+                    <span className="setting-meta muted">{MCP_STATUS[server.status]}</span>
                 </div>
             ))}
         </section>
@@ -194,7 +200,7 @@ function SettingRow({ field, providers, edit, onChange, onRevertEdit }: RowProps
     const secret = field.kind === "secret";
     // У секретов в поле только то, что ввели сейчас; маска — подсказкой.
     const shown = edit ?? (secret ? "" : field.value);
-    const placeholder = secret ? (field.isSet ? `${field.value} (leave empty to keep)` : "not set") : field.placeholder ?? "";
+    const placeholder = secret ? (field.isSet ? `${field.value} (пусто — оставить как есть)` : "не задан") : field.placeholder ?? "";
 
     return (
         <label className={`setting-row${edit !== undefined ? " edited" : ""}`}>
@@ -205,10 +211,10 @@ function SettingRow({ field, providers, edit, onChange, onRevertEdit }: RowProps
 
             {field.kind === "provider" ? (
                 <select value={shown ?? ""} onChange={event => onChange(event.target.value)}>
-                    <option value="">(default)</option>
+                    <option value="">(по умолчанию)</option>
                     {providers.map(provider => (
                         <option key={provider.id} value={provider.id}>
-                            {provider.label}{provider.configured ? "" : " — not configured"}
+                            {provider.label}{provider.configured ? "" : " — не настроен"}
                         </option>
                     ))}
                 </select>
@@ -223,10 +229,10 @@ function SettingRow({ field, providers, edit, onChange, onRevertEdit }: RowProps
             )}
 
             <span className="setting-meta muted">
-                {edit === null ? "will reset to server/.env" : edit !== undefined ? "changed" : SOURCE_LABEL[field.source]}
-                {edit !== undefined && <button type="button" className="link-button" onClick={onRevertEdit}>undo</button>}
+                {edit === null ? "вернётся значение из server/.env" : edit !== undefined ? "изменено" : SOURCE_LABEL[field.source]}
+                {edit !== undefined && <button type="button" className="link-button" onClick={onRevertEdit}>отменить</button>}
                 {edit === undefined && field.source === "ui" && (
-                    <button type="button" className="link-button" onClick={() => onChange(null)}>reset</button>
+                    <button type="button" className="link-button" onClick={() => onChange(null)}>сбросить</button>
                 )}
             </span>
         </label>

@@ -29,6 +29,7 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
         "You work inside the user's workspace through the tools listed in this request.",
         "",
         "Principles:",
+        "- When the user asks for something to be made (\"I need a site\", \"make\", \"create\", \"add\", \"мне нужен\", \"сделай\", \"создай\") and you have file-editing tools, build it: create or change the files in the workspace and get it working. Ideas you were asked to come up with (modes, style, content) go into the implementation itself. Reply with ideas or a plan only when the user explicitly asks only for ideas, a plan or advice.",
         "- Investigate before acting: list and read the relevant files instead of guessing their contents.",
         "- Use tools to make changes; describe what you did only after the tool result confirms it.",
         "- If a tool returns an error, read it, adjust and retry, or explain why the task cannot be completed.",

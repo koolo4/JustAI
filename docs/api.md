@@ -34,6 +34,7 @@
 | GET | `/api/workspace/diagnostics` | `{ checks, diagnostics, unparsed }` — запуск typecheck/lint проекта и разобранные ошибки `{ path, line, column, severity, code?, message }` |
 | GET | `/api/workspace/info` | `{ root, name, recent, switchable }` — текущая папка проекта и недавние |
 | POST | `/api/workspace/open` | Тело `{ path }` (абсолютный путь к папке). `202` и новая информация, затем сервер перезапускается на этой папке (токен прежний); `400` — папка не найдена/недопустима; `409` — агент работает |
+| DELETE | `/api/agent/sessions/:id` | `204` — удалить сессию (история и точка отката; файлы проекта не меняются); `409`, если агент работает |
 | POST | `/api/agent/sessions/:id/accept` | `204` — принять изменения: снапшот забывается, откат больше невозможен; `409`, если агент работает или нет git |
 
 Ход работы агента приходит по WebSocket (`ws://localhost:4302/?token=<token>`) событиями

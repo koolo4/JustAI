@@ -8,6 +8,7 @@ interface Props {
     disabled: boolean;
     onOpen(id: string): void;
     onNew(): void;
+    onDelete(id: string): void;
 }
 
 const STATUS_LABEL: Record<SessionSummary["status"], string> = {
@@ -21,7 +22,7 @@ const STATUS_LABEL: Record<SessionSummary["status"], string> = {
 /**
  * История сессий с поиском: продолжить любую прошлую работу агента.
  */
-export function SessionList({ sessions, activeId, disabled, onOpen, onNew }: Props) {
+export function SessionList({ sessions, activeId, disabled, onOpen, onNew, onDelete }: Props) {
     const [query, setQuery] = useState("");
 
     const filtered = useMemo(() => {
@@ -62,6 +63,17 @@ export function SessionList({ sessions, activeId, disabled, onOpen, onNew }: Pro
                         <span className="muted session-meta">
                             {STATUS_LABEL[session.status]} · {relativeTime(session.updatedAt)}
                         </span>
+                        <button
+                            className="session-delete"
+                            title={session.status === "running" ? "Сначала остановите агента" : "Удалить чат"}
+                            disabled={session.status === "running"}
+                            onClick={event => {
+                                event.stopPropagation();
+                                onDelete(session.id);
+                            }}
+                        >
+                            ×
+                        </button>
                     </li>
                 ))}
             </ul>

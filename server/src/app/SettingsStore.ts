@@ -11,14 +11,14 @@ type FieldSpec = Omit<SettingField, "value" | "isSet" | "source">;
 /** Переменные, которые можно менять из интерфейса. Остальное — только в server/.env. */
 export function settingFields(): FieldSpec[] {
     const fields: FieldSpec[] = [
-        { key: "JUSTAI_PROVIDER", label: "Default provider", group: "Agents", kind: "provider" },
-        { key: "JUSTAI_EXECUTOR_PROVIDER", label: "Executor provider (planner mode)", group: "Agents", kind: "provider" },
-        { key: "JUSTAI_SUBAGENT_PROVIDER", label: "Helper agents provider (explore/review)", group: "Agents", kind: "provider" },
+        { key: "JUSTAI_PROVIDER", label: "Провайдер по умолчанию", group: "Агенты", kind: "provider" },
+        { key: "JUSTAI_EXECUTOR_PROVIDER", label: "Исполнитель (режим планировщика)", group: "Агенты", kind: "provider" },
+        { key: "JUSTAI_SUBAGENT_PROVIDER", label: "Помощники-агенты (разведка, ревью)", group: "Агенты", kind: "provider" },
 
-        { key: "ANTHROPIC_API_KEY", label: "API key", group: "Anthropic", kind: "secret" },
-        { key: "ANTHROPIC_MODEL", label: "Model", group: "Anthropic", kind: "text" },
-        { key: "OPENAI_API_KEY", label: "API key", group: "OpenAI", kind: "secret" },
-        { key: "OPENAI_MODEL", label: "Model", group: "OpenAI", kind: "text" },
+        { key: "ANTHROPIC_API_KEY", label: "API-ключ", group: "Anthropic", kind: "secret" },
+        { key: "ANTHROPIC_MODEL", label: "Модель", group: "Anthropic", kind: "text" },
+        { key: "OPENAI_API_KEY", label: "API-ключ", group: "OpenAI", kind: "secret" },
+        { key: "OPENAI_MODEL", label: "Модель", group: "OpenAI", kind: "text" },
     ];
 
     for (const preset of COMPATIBLE_PRESETS) {
@@ -26,29 +26,29 @@ export function settingFields(): FieldSpec[] {
         const keyName = preset.keyEnv[0];
 
         if (keyName) {
-            fields.push({ key: keyName, label: "API key", group, kind: "secret" });
+            fields.push({ key: keyName, label: "API-ключ", group, kind: "secret" });
         }
 
-        fields.push({ key: `${preset.prefix}_MODEL`, label: "Model", group, kind: "text", ...(preset.defaultModel ? { placeholder: preset.defaultModel } : {}) });
+        fields.push({ key: `${preset.prefix}_MODEL`, label: "Модель", group, kind: "text", ...(preset.defaultModel ? { placeholder: preset.defaultModel } : {}) });
 
         if (preset.local || !preset.baseURL) {
-            fields.push({ key: `${preset.prefix}_BASE_URL`, label: "Base URL", group, kind: "text", ...(preset.baseURL ? { placeholder: preset.baseURL } : { placeholder: "https://…/v1" }) });
+            fields.push({ key: `${preset.prefix}_BASE_URL`, label: "Адрес сервера (Base URL)", group, kind: "text", ...(preset.baseURL ? { placeholder: preset.baseURL } : { placeholder: "https://…/v1" }) });
         }
 
-        fields.push({ key: `${preset.prefix}_CONTEXT`, label: "Context window (tokens)", group, kind: "number", placeholder: String(preset.contextTokens) });
+        fields.push({ key: `${preset.prefix}_CONTEXT`, label: "Окно контекста (токены)", group, kind: "number", placeholder: String(preset.contextTokens) });
 
         if (preset.local) {
-            fields.push({ key: `${preset.prefix}_REASONING_EFFORT`, label: "Reasoning effort (none = no thinking)", group, kind: "text" });
+            fields.push({ key: `${preset.prefix}_REASONING_EFFORT`, label: "Размышления (none — выключить)", group, kind: "text" });
         }
     }
 
     fields.push(
-        { key: "JUSTAI_COMPLETION_MODEL", label: "Tab completion model in Ollama (off = disabled)", group: "Editor", kind: "text", placeholder: "qwen2.5-coder:7b" },
-        { key: "JUSTAI_EMBED_PROVIDER", label: "Embeddings provider (search_code)", group: "Code search", kind: "provider" },
-        { key: "JUSTAI_EMBED_MODEL", label: "Embeddings model", group: "Code search", kind: "text", placeholder: "nomic-embed-text" },
-        { key: "JUSTAI_RESERVE_COOLDOWN_SEC", label: "Return to the main provider after (seconds)", group: "Reserves", kind: "number", placeholder: "120" },
-        { key: "JUSTAI_PROXY", label: "HTTP proxy for cloud providers", group: "Network", kind: "text", placeholder: "http://127.0.0.1:10809" },
-        { key: "JUSTAI_NO_PROXY", label: "Hosts without proxy (comma separated)", group: "Network", kind: "text" },
+        { key: "JUSTAI_COMPLETION_MODEL", label: "Модель подсказок по Tab в Ollama (off — выключить)", group: "Редактор", kind: "text", placeholder: "qwen2.5-coder:7b" },
+        { key: "JUSTAI_EMBED_PROVIDER", label: "Провайдер эмбеддингов (поиск по смыслу)", group: "Поиск по коду", kind: "provider" },
+        { key: "JUSTAI_EMBED_MODEL", label: "Модель эмбеддингов", group: "Поиск по коду", kind: "text", placeholder: "nomic-embed-text" },
+        { key: "JUSTAI_RESERVE_COOLDOWN_SEC", label: "Вернуться к главному провайдеру через (секунд)", group: "Резервы", kind: "number", placeholder: "120" },
+        { key: "JUSTAI_PROXY", label: "HTTP-прокси для облачных провайдеров", group: "Сеть", kind: "text", placeholder: "http://127.0.0.1:10809" },
+        { key: "JUSTAI_NO_PROXY", label: "Адреса без прокси (через запятую)", group: "Сеть", kind: "text" },
     );
 
     return fields;
@@ -115,7 +115,7 @@ export class SettingsStore {
             const field = this.fields.get(key);
 
             if (!field) {
-                throw new BadRequestError(`Setting ${key} cannot be changed from the interface.`);
+                throw new BadRequestError(`Настройку ${key} нельзя менять из интерфейса.`);
             }
 
             if (value === null) {
@@ -126,11 +126,11 @@ export class SettingsStore {
             const trimmed = value.trim();
 
             if (field.kind === "number" && trimmed && !(Number(trimmed) > 0)) {
-                throw new BadRequestError(`${field.group} · ${field.label}: enter a positive number.`);
+                throw new BadRequestError(`${field.group} · ${field.label}: введите положительное число.`);
             }
 
             if (/[\r\n]/.test(trimmed)) {
-                throw new BadRequestError(`${field.group} · ${field.label}: line breaks are not allowed.`);
+                throw new BadRequestError(`${field.group} · ${field.label}: переносы строк недопустимы.`);
             }
 
             saved[key] = trimmed;

@@ -17,7 +17,7 @@ import type {
 
 import { useIDEContext } from "../context/useIDEContext";
 import { useAgentSession, type ToolProgress } from "../hooks/useAgentSession";
-import { fetchProfiles, fetchProviders, fetchSessions } from "../services/agentApi";
+import { deleteSession, fetchProfiles, fetchProviders, fetchSessions } from "../services/agentApi";
 import { IntegrationCard } from "./IntegrationCard";
 import { MentionTextarea } from "./MentionTextarea";
 import { SessionChanges } from "./SessionChanges";
@@ -155,6 +155,25 @@ export function AgentChat({ onReview }: { onReview?: (request: ReviewRequest) =>
                         onNew={() => {
                             agent.reset();
                             setShowSessions(false);
+                        }}
+                        onDelete={async id => {
+                            const session = sessions.find(item => item.id === id);
+
+                            if (!window.confirm(`Удалить чат «${session?.title ?? id}»? Файлы проекта не изменятся.`)) {
+                                return;
+                            }
+
+                            try {
+                                await deleteSession(id);
+                                setSessions(list => list.filter(item => item.id !== id));
+
+                                if (agent.session?.id === id) {
+                                    agent.reset();
+                                }
+                            }
+                            catch (reason) {
+                                window.alert(reason instanceof Error ? reason.message : String(reason));
+                            }
                         }}
                     />
                 )}

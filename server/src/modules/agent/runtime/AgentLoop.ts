@@ -98,6 +98,11 @@ export class AgentLoop {
 
     private compaction: Compaction | undefined;
 
+    /** Вызовы инструментов в этом прогоне (для страховки «просили сделать — ответил текстом»). */
+    private toolCallsThisRun = 0;
+
+    private nudgedToBuild = false;
+
     constructor(
         private readonly options: AgentLoopOptions,
     ) {
@@ -205,6 +210,21 @@ export class AgentLoop {
                     continue;
                 }
 
+                // Просили сделать, а модель сразу ответила текстом (идеи, план) и не тронула ни одного инструмента.
+                if (
+                    !this.nudgedToBuild &&
+                    this.toolCallsThisRun === 0 &&
+                    this.options.tools.some(tool => tool.kind === "write" && tool.changesFiles !== false) &&
+                    asksToBuild(lastUserText(messages))
+                ) {
+                    this.nudgedToBuild = true;
+                    await add(createMessage("user", [{
+                        type: "text",
+                        text: "[JustAI] The user asked you to build this, not to describe it. Implement it now in the workspace: create the files with write_file (or delegate the steps), putting your ideas (modes, style, content) into the actual code. Then report briefly what you built.",
+                    }]));
+                    continue;
+                }
+
                 if (turn.stopReason === "pause_turn") {
                     continue;
                 }
@@ -230,6 +250,8 @@ export class AgentLoop {
 
                 return this.result("completed", verdict.reason);
             }
+
+            this.toolCallsThisRun += toolUses.length;
 
             // Вход инструмента, обрезанный по max_tokens, часто выглядит валидным — не выполняем.
             const results = turn.stopReason === "max_tokens"
@@ -556,6 +578,44 @@ export function claimsFileChanges(content: ContentBlock[]): boolean {
         .join("\n");
 
     return /\b(has|have) been (added|updated|created|modified|implemented|fixed|changed|written)\b|\bI(?:'ve| have)? (added|updated|created|modified|implemented|fixed|changed|wrote|rewrote)\b|<tool_response>/i.test(text);
+}
+
+/**
+ * Пользователь просит что-то сделать (а не объяснить или посоветовать): «сделай», «создай», «мне нужен сайт», «build an app».
+ * Вопросы и просьбы об идеях/плане без слов действия не считаются.
+ */
+export function asksToBuild(text: string): boolean {
+    const lower = text.toLowerCase();
+    // \b в JS не понимает кириллицу — границы слов задаются пробелами.
+    const onlyIdeas = /(^|\s)(только|just|only)\s[^.?!]{0,40}(иде|план|совет|idea|plan|advice)/.test(lower)
+        || /^(объясни|расскажи|что такое|как работает|почему|explain|what is|why|how does)(\s|$)/.test(lower.trim());
+
+    if (onlyIdeas) {
+        return false;
+    }
+
+    return /(сдела|созда|напиши|написать|реализу|добав|нужен|нужна|нужно|сверста|собери|запили|build|make|create|implement|write|add)\w*/.test(lower)
+        && /(сайт|страниц|игр|приложени|бот|скрипт|сервис|функци|компонент|файл|код|лендинг|site|page|game|app|script|bot|service|feature|component|file|code)/.test(lower);
+}
+
+/** Текст последнего сообщения пользователя (не результаты инструментов и не подсказки JustAI). */
+function lastUserText(messages: Message[]): string {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const message = messages[i]!;
+
+        if (message.role !== "user") continue;
+
+        const text = message.content
+            .map(block => block.type === "text" ? block.text : "")
+            .join("\n")
+            .trim();
+
+        if (text && !text.startsWith("[JustAI]")) {
+            return text;
+        }
+    }
+
+    return "";
 }
 
 /** В ответе нет ни текста, ни вызова инструмента (размышления не считаются). */

@@ -75,6 +75,28 @@ export class SessionStore {
         return fold(text);
     }
 
+    /** Удалить файл сессии. false — такой сессии нет. */
+    public async delete(id: string): Promise<boolean> {
+        if (!ID_PATTERN.test(id)) {
+            return false;
+        }
+
+        await this.queues.get(id)?.catch(() => undefined);
+        this.queues.delete(id);
+
+        try {
+            await fs.rm(this.file(id));
+            return true;
+        }
+        catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+                return false;
+            }
+
+            throw error;
+        }
+    }
+
     public async list(): Promise<SessionSummary[]> {
         let files: string[];
 

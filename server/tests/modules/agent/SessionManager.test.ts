@@ -121,6 +121,24 @@ describe("SessionManager", () => {
         expect((await second.list()).map(s => s.id)).toEqual([id]);
     });
 
+    it("deletes a finished session but not a running one", async () => {
+        const sessions = manager();
+        const { id } = await sessions.create({ provider: "mock" });
+
+        const running = sessions.send(id, { text: "прочитай src/index.ts" });
+        await expect(sessions.delete(id)).rejects.toBeInstanceOf(ConflictError);
+        await running;
+        await sessions.waitForIdle(id);
+
+        await sessions.delete(id);
+
+        expect(await sessions.list()).toEqual([]);
+        await expect(sessions.get(id)).rejects.toThrow(/not found/);
+        // После «перезапуска» сессия тоже не появляется.
+        expect(await manager().list()).toEqual([]);
+        expect(await readFile(path.join(workspace.root, "src/index.ts"), "utf8")).toBe("export const answer = 42;\n");
+    });
+
     it("rejects a second message while the agent is running", async () => {
         const sessions = manager();
         const { id } = await sessions.create({ provider: "mock" });
