@@ -217,6 +217,36 @@ describe.skipIf(!git.available)("GitHubTaskRunner", () => {
         expect(runner.getStatus().tasks[0]).toMatchObject({ issue: 20, status: "review" });
     }, 60_000);
 
+    it("resumes a task interrupted by a restart, keeping the agent's unfinished changes", async () => {
+        github.issue(30, "создай файл f.txt");
+        await runner.check();
+
+        // Имитация обрыва: состояние «в работе», папка на ветке задачи с незакоммиченной правкой агента.
+        const stateFile = path.join(root, ".justai", "github-state.json");
+        const fs = await import("node:fs/promises");
+        const state = JSON.parse(await fs.readFile(stateFile, "utf8")) as { tasks: Record<string, { status: string }> };
+        state.tasks["30"]!.status = "working";
+        await fs.writeFile(stateFile, JSON.stringify(state));
+        run(root, "checkout", "justai/issue-30");
+        await fs.writeFile(path.join(root, "partial.txt"), "unfinished work", "utf8");
+
+        const restarted = new GitHubTaskRunner({
+            client: github as unknown as GitHubClient,
+            git,
+            sessions,
+            permissions: new PermissionService({ rulesFile: path.join(root, ".justai", "p.json"), emit: () => undefined }),
+            workspaceRoot: root,
+            config: { label: "justai", allowedUsers: [], profile: "coder", provider: "mock", pollMs: 60_000, allowPublic: false, token: "" },
+        });
+
+        await restarted.check();
+
+        expect(restarted.getStatus().tasks).toEqual([expect.objectContaining({ issue: 30, status: "review" })]);
+        // Недописанная правка не потерялась: она в ветке задачи.
+        expect(run(remote, "ls-tree", "--name-only", "justai/issue-30")).toContain("partial.txt");
+        expect(run(root, "rev-parse", "--abbrev-ref", "HEAD").trim()).toBe("main");
+    }, 60_000);
+
     it("recognises task markers and follow-ups", () => {
         const make = (title: string, body: string, labels: string[] = []) => ({ number: 1, title, body, author: "me", labels, url: "", isPullRequest: false });
 

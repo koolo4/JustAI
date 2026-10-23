@@ -61,6 +61,17 @@ interface StoredState {
 
 const REPORT_CHARS = 3_000;
 
+const RESUME_NOTE = "The previous run of this task was interrupted (JustAI was restarted). Check the current state of the files and continue from where you stopped until the task, including any requested changes above, is complete.";
+
+function summarize(state: StoredState): GitHubRunnerStatus["tasks"] {
+    return Object.entries(state.tasks).map(([issue, task]) => ({
+        issue: Number(issue),
+        status: task.status,
+        branch: task.branch,
+        ...(task.pullRequest ? { pullRequest: task.pullRequest } : {}),
+    }));
+}
+
 /**
  * Мост GitHub → JustAI: задачи из issues выполняются локальным агентом без присмотра,
  * результат — ветка, pull request и отчёт в issue. Новые комментарии к задаче — доработка той же ветки.
@@ -139,7 +150,18 @@ export class GitHubTaskRunner {
 
         const allowed = await this.allowedUsers();
         const state = await this.load();
+        this.status = { ...this.status, tasks: summarize(state) };
         const open = (await client.listIssues()).filter(issue => !issue.isPullRequest && allowed.has(issue.author.toLowerCase()));
+
+        // «В работе» в файле, но не в этом процессе: задачу оборвал перезапуск JustAI — продолжаем в той же сессии.
+        for (const issue of open) {
+            const task = state.tasks[issue.number];
+
+            if (task?.status === "working" && task.sessionId) {
+                await this.run(issue, state, [{ id: 0, author: "JustAI", body: RESUME_NOTE, createdAt: "" }]);
+                return;
+            }
+        }
 
         // Правки отдельным issue («/justai #3»): для планировщиков, которым GitHub не даёт комментировать.
         for (const issue of open) {
@@ -196,17 +218,20 @@ export class GitHubTaskRunner {
     private async run(issue: GitHubIssue, state: StoredState, feedback: GitHubComment[], knownComments?: GitHubComment[]): Promise<void> {
         const { client, sessions, permissions, config } = this.deps;
 
-        // Чужие незакоммиченные изменения не трогаем: задача подождёт.
-        const dirty = (await this.git(["status", "--porcelain", "--", ".", ":(exclude).justai"])).trim();
+        const previous = state.tasks[issue.number];
+        const branch = previous?.branch ?? `justai/issue-${issue.number}`;
 
-        if (dirty) {
+        // Чужие незакоммиченные изменения не трогаем: задача подождёт.
+        // Исключение — папка уже на ветке этой задачи (работу оборвал перезапуск): изменения агента продолжаются.
+        const dirty = (await this.git(["status", "--porcelain", "--", ".", ":(exclude).justai"])).trim() !== "";
+        const onTaskBranch = (await this.git(["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => "")).trim() === branch;
+
+        if (dirty && !onTaskBranch) {
             this.status = { ...this.status, state: "error", lastError: "The workspace has uncommitted changes; GitHub tasks wait until it is clean." };
             return;
         }
 
         const comments = knownComments ?? await client.listComments(issue.number);
-        const previous = state.tasks[issue.number];
-        const branch = previous?.branch ?? `justai/issue-${issue.number}`;
         const base = await client.defaultBranch();
 
         this.status = { ...this.status, state: "working", currentIssue: issue.number, lastError: undefined, warning: undefined };
@@ -228,7 +253,12 @@ export class GitHubTaskRunner {
         await this.save(state);
 
         try {
-            await this.checkoutBranch(branch, base, Boolean(previous));
+            if (dirty && onTaskBranch) {
+                await this.git(["fetch", "origin"], true);
+            }
+            else {
+                await this.checkoutBranch(branch, base, Boolean(previous));
+            }
 
             if (!task.sessionId || !(await sessions.get(task.sessionId).then(() => true, () => false))) {
                 const created = await sessions.create({
@@ -383,15 +413,7 @@ export class GitHubTaskRunner {
     private async save(state: StoredState): Promise<void> {
         await mkdir(path.dirname(this.stateFile), { recursive: true });
         await writeFile(this.stateFile, JSON.stringify(state, null, 2), "utf8");
-        this.status = {
-            ...this.status,
-            tasks: Object.entries(state.tasks).map(([issue, task]) => ({
-                issue: Number(issue),
-                status: task.status,
-                branch: task.branch,
-                ...(task.pullRequest ? { pullRequest: task.pullRequest } : {}),
-            })),
-        };
+        this.status = { ...this.status, tasks: summarize(state) };
     }
 }
 
