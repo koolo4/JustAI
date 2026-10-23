@@ -51,6 +51,8 @@ export function settingFields(): FieldSpec[] {
         { key: "JUSTAI_GITHUB_LABEL", label: "Метка задач", group: "GitHub", kind: "text", placeholder: "justai" },
         { key: "JUSTAI_GITHUB_ALLOWED_USERS", label: "Кто может ставить задачи (логины через запятую; пусто — владелец токена)", group: "GitHub", kind: "text" },
         { key: "JUSTAI_GITHUB_ALLOW_PUBLIC", label: "Разрешить публичный репозиторий (on/off; задачи всё равно только от разрешённых авторов)", group: "GitHub", kind: "text", placeholder: "off" },
+        { key: "JUSTAI_GITHUB_MERGE", label: "Сливать PR по команде «/justai merge», если проверки зелёные (on/off)", group: "GitHub", kind: "text", placeholder: "on" },
+        { key: "JUSTAI_GITHUB_MERGE_METHOD", label: "Способ слияния (squash, merge или rebase)", group: "GitHub", kind: "text", placeholder: "squash" },
         { key: "JUSTAI_GITHUB_POLL_SEC", label: "Проверять новые задачи каждые (секунд)", group: "GitHub", kind: "number", placeholder: "60" },
         { key: "JUSTAI_COMPLETION_MODEL", label: "Модель подсказок по Tab в Ollama (off — выключить)", group: "Редактор", kind: "text", placeholder: "qwen2.5-coder:7b" },
         { key: "JUSTAI_EMBED_PROVIDER", label: "Провайдер эмбеддингов (поиск по смыслу)", group: "Поиск по коду", kind: "provider" },

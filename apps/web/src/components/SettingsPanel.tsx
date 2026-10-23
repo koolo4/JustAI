@@ -151,7 +151,7 @@ interface GitHubInfo {
         warning?: string;
         tasks: Array<{
             issue: number;
-            status: "working" | "review" | "failed" | "paused";
+            status: "working" | "review" | "failed" | "paused" | "merged";
             branch: string;
             pullRequest?: string;
             kind?: "code" | "test";
@@ -167,8 +167,8 @@ const RUNNER_STATE: Record<NonNullable<GitHubInfo["runner"]>["state"], string> =
     stopped: "остановлен",
 };
 
-const TASK_STATE = { working: "в работе", review: "готов PR", failed: "не удалось", paused: "на паузе" } as const;
-const TEST_STATE = { working: "проверяется", review: "проверка: PASS", failed: "проверка: FAIL", paused: "на паузе" } as const;
+const TASK_STATE = { working: "в работе", review: "готов PR", failed: "не удалось", paused: "на паузе", merged: "слито" } as const;
+const TEST_STATE = { working: "проверяется", review: "проверка: PASS", failed: "проверка: FAIL", paused: "на паузе", merged: "слито" } as const;
 const CHECKS = { passed: " · проверки ✓", failed: " · проверки ✕", skipped: "" } as const;
 
 /** Мост GitHub: что настроено, что делает исполнитель задач. Настраивается полями раздела GitHub ниже. */

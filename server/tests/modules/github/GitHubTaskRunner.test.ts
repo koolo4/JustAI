@@ -24,7 +24,7 @@ import { BOT_MARKER, GitHubError, type GitHubClient, type GitHubComment, type Gi
 import { ProcessManager } from "../../../src/infrastructure/process/ProcessManager.js";
 import { Verifier } from "../../../src/modules/agent/runtime/Verifier.js";
 import {
-    ARTIFACTS_BRANCH, checksReport, followUpCommand, followUpTarget, GitHubTaskRunner, isStopCommand, isTask, isTestTask, LABELS, originMatches,
+    ARTIFACTS_BRANCH, checksReport, dependsOn, followUpCommand, followUpTarget, GitHubTaskRunner, isMergeCommand, isStopCommand, isTask, isTestTask, LABELS, originMatches,
     progressReport, runCommentCommand, runIssueCommand, stripCommands, taskPrompt, testTarget, testVerdict,
 } from "../../../src/modules/github/GitHubTaskRunner.js";
 
@@ -96,6 +96,17 @@ class FakeGitHub {
         this.pulls.push(pull);
         return { number: pull.number, url: pull.url, head, state: "open" };
     }
+
+    /** Слияние: «GitHub» переносит основную ветку на ветку PR (в тестах она всегда от основной). */
+    public onMerge?: (head: string) => void;
+    public merged: number[] = [];
+    public deletedBranches: string[] = [];
+    public async mergePullRequest(number: number) {
+        const pull = this.pulls.find(item => item.number === number)!;
+        this.onMerge?.(pull.head);
+        this.merged.push(number);
+    }
+    public async deleteBranch(branch: string) { this.deletedBranches.push(branch); }
 
     public uploads: Array<{ branch: string; path: string }> = [];
     public async uploadFile(branch: string, filePath: string) {
@@ -463,6 +474,97 @@ describe.skipIf(!git.available)("GitHubTaskRunner", () => {
         expect(run(root, "rev-parse", "--abbrev-ref", "HEAD").trim()).toBe("main");
         expect(run(root, "status", "--porcelain", "--", ".", ":(exclude).justai").trim()).toBe("");
     }, 90_000);
+
+    it("waits for dependencies, merges on «/justai merge» and then starts the dependent task", async () => {
+        github.onMerge = head => run(remote, "update-ref", "refs/heads/main", `refs/heads/${head}`);
+        github.issue(80, "создай файл base.txt");
+        github.issue(81, "создай файл next.txt", "me", { body: "Вторая часть.\nDepends on #80" });
+
+        await runner.check();
+        expect(runner.getStatus().tasks.map(task => task.issue)).toEqual([80]);
+
+        // #81 ждёт и сообщает об этом один раз.
+        await runner.check();
+        await runner.check();
+        expect(github.comments.get(81)).toHaveLength(1);
+        expect(github.comments.get(81)![0]!.body).toContain("ждёт #80");
+
+        github.comments.get(80)!.push({ id: 600, author: "me", body: "/justai merge", createdAt: "" });
+        await runner.check();
+
+        expect(github.merged).toEqual([100]);
+        expect(github.closed).toContain(80);
+        expect(github.deletedBranches).toEqual(["justai/issue-80"]);
+        expect(github.issues.find(item => item.number === 80)!.labels).toContain(LABELS.merged);
+        expect(github.comments.get(80)!.at(-1)!.body).toContain("слит в `main`");
+        expect(runner.getStatus().tasks[0]).toMatchObject({ issue: 80, status: "merged" });
+
+        // Зависимость закрыта — #81 начинается от обновлённой основной ветки.
+        await runner.check();
+        const files = run(remote, "ls-tree", "--name-only", "justai/issue-81");
+        expect(files).toContain("base.txt");
+        expect(files).toContain("next.txt");
+
+        // Повторное слияние той же задачи не выполняется.
+        github.issue(82, "Merge", "me", { labels: [], body: "/justai merge #80" });
+        await runner.check();
+        expect(github.merged).toEqual([100]);
+        expect(github.comments.get(82)![0]!.body).toContain("она уже слита");
+        expect(github.closed).toContain(82);
+    }, 90_000);
+
+    it("refuses to merge when the project checks fail or merging is off", async () => {
+        await writeFile(path.join(root, "package.json"), JSON.stringify({ name: "p", scripts: { test: "node -e \"process.exit(3)\"" } }));
+        run(root, "add", "package.json");
+        run(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "package");
+        run(root, "push", "origin", "HEAD:main");
+
+        const processes = new ProcessManager();
+        const strict = new GitHubTaskRunner({
+            client: github as unknown as GitHubClient,
+            git,
+            sessions,
+            permissions: new PermissionService({ rulesFile: path.join(root, ".justai", "p5.json"), emit: () => undefined }),
+            workspaceRoot: root,
+            processes,
+            verifier: new Verifier({ processes, workspaceRoot: root, kinds: ["test"], timeoutMs: 60_000 }),
+            config: { label: "justai", allowedUsers: [], profile: "coder", provider: "mock", pollMs: 60_000, allowPublic: false, token: "" },
+        });
+
+        github.issue(90, "создай файл z.txt");
+        await strict.check();
+        expect(github.comments.get(90)!.at(-1)!.body).toContain("❌ не прошли: 1 из 1");
+
+        github.comments.get(90)!.push({ id: 700, author: "me", body: "/justai merge", createdAt: "" });
+        await strict.check();
+        expect(github.merged).toEqual([]);
+        expect(github.comments.get(90)!.at(-1)!.body).toContain("не слито — проверки не прошли");
+        expect(run(root, "rev-parse", "--abbrev-ref", "HEAD").trim()).toBe("main");
+
+        const off = new GitHubTaskRunner({
+            client: github as unknown as GitHubClient,
+            git,
+            sessions,
+            permissions: new PermissionService({ rulesFile: path.join(root, ".justai", "p6.json"), emit: () => undefined }),
+            workspaceRoot: root,
+            config: { label: "justai", allowedUsers: [], profile: "coder", provider: "mock", pollMs: 60_000, allowPublic: false, token: "", merge: false },
+        });
+        github.comments.get(90)!.push({ id: 701, author: "me", body: "/justai merge", createdAt: "" });
+        await off.check();
+        expect(github.comments.get(90)!.at(-1)!.body).toContain("слияние на этом ПК выключено");
+        expect(github.merged).toEqual([]);
+    }, 90_000);
+
+    it("recognises dependencies and merge commands", () => {
+        const make = (body: string) => ({ number: 1, title: "x", body, author: "me", labels: [], url: "", isPullRequest: false });
+
+        expect(dependsOn("Сделай страницу.\nDepends on #3, #4\n")).toEqual([3, 4]);
+        expect(dependsOn("- **Зависит от:** #7")).toEqual([7]);
+        expect(dependsOn("See #3 for context")).toEqual([]);
+        expect(isMergeCommand("/justai merge", "justai")).toBe(true);
+        expect(isMergeCommand("do not /justai merge yet", "justai")).toBe(false);
+        expect(followUpCommand(make("/justai merge #5"), "justai")).toEqual({ target: 5, action: "merge" });
+    });
 
     it("recognises test tasks, run commands and test verdicts", () => {
         const make = (title: string, body: string) => ({ number: 1, title, body, author: "me", labels: [], url: "", isPullRequest: false });

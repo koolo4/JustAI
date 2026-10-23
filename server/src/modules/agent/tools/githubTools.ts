@@ -31,11 +31,29 @@ export function createGitHubTools(client: () => GitHubClient | null, label: () =
         inputSchema: z.object({
             title: z.string().min(3).max(200),
             body: z.string().min(10).max(60_000).describe("Full task description in Markdown."),
+            depends_on: z.array(z.number().int().positive()).max(20).optional()
+                .describe("Tasks that must be merged first; this task waits until their issues are closed. Lets you post the whole plan at once."),
         }),
         kind: "network",
-        run: async ({ title, body }) => {
-            const issue = await github().createIssue(title, body, [label()]);
-            return `Created task #${issue.number}: ${issue.url}`;
+        run: async ({ title, body, depends_on }) => {
+            const full = depends_on?.length ? `${body.trim()}\n\nDepends on ${depends_on.map(number => `#${number}`).join(", ")}` : body;
+            const issue = await github().createIssue(title, full, [label()]);
+            return `Created task #${issue.number}: ${issue.url}${depends_on?.length ? ` (starts after ${depends_on.map(number => `#${number}`).join(", ")} are merged)` : ""}`;
+        },
+    });
+
+    const mergeTask = defineTool({
+        name: "github_merge_task",
+        description: [
+            "Approves a task: the coding agent's computer re-runs the project checks on the pull request branch and, if they pass, merges the pull request",
+            "into the main branch and closes the issue (tasks that depend on it then start). Use only after reviewing the diff and, for UI work, a test task.",
+            "The result (merged, or why not) is posted to the issue.",
+        ].join(" "),
+        inputSchema: z.object({ issue: z.number().int().positive() }),
+        kind: "network",
+        run: async ({ issue }) => {
+            await github().comment(issue, `/${label()} merge`, false);
+            return `Merge requested for #${issue}; check the result with github_review_task after a minute.`;
         },
     });
 
@@ -146,5 +164,5 @@ export function createGitHubTools(client: () => GitHubClient | null, label: () =
         },
     });
 
-    return [createTask, listTasks, reviewTask, requestChanges, testTask, runCommand];
+    return [createTask, listTasks, reviewTask, requestChanges, testTask, runCommand, mergeTask];
 }

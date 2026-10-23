@@ -16,6 +16,7 @@ export const LABELS = {
     review: "justai:review",
     failed: "justai:failed",
     paused: "justai:paused",
+    merged: "justai:merged",
 } as const;
 
 export interface GitHubRunnerConfig {
@@ -38,6 +39,9 @@ export interface GitHubRunnerConfig {
     testProfile?: string;
     /** Предел времени команды «/justai run» (мс, по умолчанию 5 минут). */
     commandTimeoutMs?: number;
+    /** Сливать PR по команде «/justai merge» (при зелёных проверках). По умолчанию да. */
+    merge?: boolean;
+    mergeMethod?: "squash" | "merge" | "rebase";
 }
 
 export interface GitHubRunnerStatus {
@@ -57,7 +61,7 @@ export interface GitHubRunnerStatus {
 interface TaskState {
     sessionId: string;
     branch: string;
-    status: "working" | "review" | "failed" | "paused";
+    status: "working" | "review" | "failed" | "paused" | "merged";
     /** Последний учтённый комментарий: новые после него — правки. */
     lastCommentId: number;
     pullRequest?: string;
@@ -71,8 +75,10 @@ interface StoredState {
     tasks: Record<string, TaskState>;
     /** Служебные issues с правками и командами, которые уже приняты. */
     followUps?: number[];
-    /** Комментарии «/justai run …», которые уже выполнены. */
+    /** Комментарии «/justai run …» и «/justai merge», которые уже выполнены. */
     ran?: number[];
+    /** Задачи, ждущие других (номер → чего ждёт): чтобы сообщить об ожидании один раз. */
+    waiting?: Record<string, number[]>;
 }
 
 interface ProgressWatch {
@@ -196,7 +202,10 @@ export class GitHubTaskRunner {
         const allowed = await this.allowedUsers();
         const state = await this.load();
         this.status = { ...this.status, tasks: summarize(state) };
-        const open = (await client.listIssues()).filter(issue => !issue.isPullRequest && allowed.has(issue.author.toLowerCase()));
+        const all = (await client.listIssues()).filter(issue => !issue.isPullRequest);
+        const open = all.filter(issue => allowed.has(issue.author.toLowerCase()));
+        // Зависимость выполнена, когда её issue закрыт (слияние PR «Closes #N» закрывает его само).
+        const openNumbers = new Set(all.map(issue => issue.number));
 
         // «В работе» в файле, но не в этом процессе: задачу оборвал перезапуск JustAI — продолжаем в той же сессии.
         for (const issue of open) {
@@ -217,11 +226,23 @@ export class GitHubTaskRunner {
                 continue;
             }
 
+            const action = followUpCommand(issue, config.label)?.action;
+
+            // «/justai merge #N»: слить PR задачи (проверки запускаются заново).
+            if (action === "merge") {
+                if (!(await this.merge(target, task, state, issue.number))) return;
+
+                state.followUps = [...state.followUps ?? [], issue.number];
+                await this.save(state);
+                await this.soft(client.closeIssue(issue.number), "closing issues");
+                return;
+            }
+
             state.followUps = [...state.followUps ?? [], issue.number];
             await this.save(state);
 
             // «/justai stop #N», когда задача не выполняется, — останавливать нечего.
-            if (followUpCommand(issue, config.label)?.action === "stop") {
+            if (action === "stop") {
                 await this.soft(client.comment(issue.number, `Задача #${target} сейчас не выполняется — останавливать нечего.`), "comments");
                 await this.soft(client.closeIssue(issue.number), "closing issues");
                 continue;
@@ -263,6 +284,20 @@ export class GitHubTaskRunner {
             const task = state.tasks[issue.number];
 
             if (!task) {
+                // «Depends on #N»: задача ждёт, пока те задачи не будут слиты (их issues закрыты).
+                const waiting = dependsOn(issue.body).filter(number => number !== issue.number && openNumbers.has(number));
+
+                if (waiting.length) {
+                    if (state.waiting?.[issue.number]?.join() !== waiting.join()) {
+                        state.waiting = { ...state.waiting, [issue.number]: waiting };
+                        await this.save(state);
+                        await this.soft(client.comment(issue.number,
+                            `⏳ **JustAI**: задача ждёт ${waiting.map(number => `#${number}`).join(", ")} — начну, когда ${waiting.length > 1 ? "они будут слиты" : "она будет слита"} (issue закроется).`), "comments");
+                    }
+
+                    continue;
+                }
+
                 // Задачу могли пометить маркером в тексте (метку ставит не каждая интеграция) — метку ставим сами.
                 if (!issue.labels.includes(config.label)) {
                     await this.soft(client.addLabels(issue.number, [config.label]), "labels");
@@ -281,18 +316,24 @@ export class GitHubTaskRunner {
                 item.id > task.lastCommentId && allowed.has(item.author.toLowerCase()) && !item.body.includes(BOT_MARKER)
                 && !state.ran?.includes(item.id));
 
-            // «/justai run команда» в задаче: выполнить в её ветке и ответить результатом.
+            // «/justai run команда» в задаче: выполнить в её ветке и ответить результатом; «/justai merge» — слить PR.
             for (const item of fresh) {
                 const command = runCommentCommand(item.body, config.label);
+                const merge = !command && isMergeCommand(item.body, config.label);
 
-                if (!command) continue;
-                if (!(await this.runCommand(issue.number, task.branch, command))) return;
+                if (!command && !merge) continue;
+                if (!(command ? await this.runCommand(issue.number, task.branch, command) : await this.merge(issue.number, task, state, issue.number))) return;
 
                 state.ran = [...state.ran ?? [], item.id].slice(-200);
                 await this.save(state);
             }
 
-            const feedback = fresh.filter(item => !isStopCommand(item.body, config.label) && !runCommentCommand(item.body, config.label));
+            if (task.status === "merged") {
+                continue;
+            }
+
+            const feedback = fresh.filter(item => !isStopCommand(item.body, config.label) && !runCommentCommand(item.body, config.label)
+                && !isMergeCommand(item.body, config.label));
 
             if (feedback.length > 0) {
                 await this.run(issue, state, feedback, comments);
@@ -346,6 +387,7 @@ export class GitHubTaskRunner {
         };
 
         state.tasks[issue.number] = task;
+        if (state.waiting?.[issue.number]) delete state.waiting[issue.number];
         await this.save(state);
 
         try {
@@ -396,7 +438,8 @@ export class GitHubTaskRunner {
                 return;
             }
 
-            const committed = await this.commit(issue, watch.stopped ? "WIP: " : "");
+            // Коммиты мог сделать и агент (например, слияние основной ветки для разрешения конфликта) — их тоже отправляем.
+            const committed = await this.commit(issue, watch.stopped ? "WIP: " : "") || await this.isAhead(branch);
 
             if (committed) {
                 await this.push(branch);
@@ -442,7 +485,7 @@ export class GitHubTaskRunner {
                 clip(report, REPORT_CHARS),
                 ...screenshots,
                 "",
-                `_Reply in this issue to request changes — JustAI will continue on the same branch. Run a command on this branch: \`/${config.label} run <command>\`._`,
+                `_Reply in this issue to request changes — JustAI will continue on the same branch. Run a command on this branch: \`/${config.label} run <command>\`. Merge when it is good: \`/${config.label} merge\`._`,
             ].join("\n")), "comments");
 
             await this.soft(client.addLabels(issue.number, [ok ? LABELS.review : LABELS.failed]), "labels");
@@ -576,6 +619,76 @@ export class GitHubTaskRunner {
         return true;
     }
 
+    /**
+     * «/justai merge»: слить PR задачи в основную ветку — только готовую задачу и только если проверки,
+     * запущенные заново на ветке PR, не падают. false — папка занята, повторить позже.
+     */
+    private async merge(issueNumber: number, task: TaskState, state: StoredState, replyTo: number): Promise<boolean> {
+        const { client, config } = this.deps;
+        const say = (text: string) => this.soft(client.comment(replyTo, text), "comments");
+        const pullNumber = Number(/\/pull\/(\d+)/.exec(task.pullRequest ?? "")?.[1] ?? 0);
+
+        if (config.merge === false) {
+            await say("⛔ **JustAI**: слияние на этом ПК выключено (`JUSTAI_GITHUB_MERGE=off`) — слейте pull request вручную.");
+            return true;
+        }
+
+        if (task.kind === "test" || !pullNumber || task.status !== "review") {
+            await say(task.kind === "test"
+                ? "⛔ **JustAI**: это задача-проверка — сливать нечего."
+                : `⛔ **JustAI**: задачу #${issueNumber} слить нельзя — ${task.status === "merged" ? "она уже слита" : !pullNumber ? "pull request ещё нет" : `она в состоянии «${task.status}», а нужно «review» (готов PR)`}.`);
+            return true;
+        }
+
+        if (await this.isDirty()) {
+            this.status = { ...this.status, state: "error", lastError: "The workspace has uncommitted changes; GitHub tasks wait until it is clean." };
+            return false;
+        }
+
+        const base = await client.defaultBranch();
+        this.status = { ...this.status, state: "working", currentIssue: issueNumber, lastError: undefined };
+        this.deps.log?.(`[github] issue #${issueNumber}: merge ${task.branch}`);
+
+        try {
+            // Проверки — на том, что сейчас в ветке PR (после отчёта её могли доработать).
+            await this.checkoutDetached(task.branch);
+            const checks = await this.runChecks();
+            if (checks) task.checks = checks.status;
+
+            if (checks?.status === "failed") {
+                await say(["❌ **JustAI**: не слито — проверки не прошли.", "", checksReport(checks), "", "_Попросите исправить комментарием, затем снова `/" + config.label + " merge`._"].join("\n"));
+                return true;
+            }
+
+            await client.mergePullRequest(pullNumber, `JustAI: ${cleanTitle((await client.getIssue(issueNumber)).title, config.label)} (#${issueNumber})`, config.mergeMethod ?? "squash");
+
+            task.status = "merged";
+            await this.soft(client.removeLabel(issueNumber, LABELS.review), "labels");
+            await this.soft(client.addLabels(issueNumber, [LABELS.merged]), "labels");
+            await this.soft(client.comment(issueNumber, [
+                `🔀 **JustAI**: pull request ${task.pullRequest} слит в \`${base}\`.`,
+                ...(checks ? ["", checksReport(checks)] : []),
+            ].join("\n")), "comments");
+            await this.soft(client.closeIssue(issueNumber), "closing issues");
+            await this.soft(client.deleteBranch(task.branch), "branches", "Contents");
+            if (replyTo !== issueNumber) await say(`🔀 Задача #${issueNumber} слита.`);
+        }
+        catch (error) {
+            const notReady = error instanceof GitHubError && (error.status === 405 || error.status === 409);
+            await say(notReady
+                ? `⚠️ **JustAI**: GitHub не даёт слить PR — конфликт с \`${base}\` или ветка не готова (${clip(message(error), 300)}). Попросите комментарием: «влей ${base} в ветку и разреши конфликты», затем снова \`/${config.label} merge\`.`
+                : `⚠️ **JustAI**: не удалось слить: ${clip(message(error), 1_000)}`);
+        }
+        finally {
+            await this.discardChanges().catch(() => undefined);
+            await this.git(["checkout", base]).catch(() => undefined);
+            await this.save(state);
+            this.status = { ...this.status, currentIssue: undefined, ...(this.status.state === "working" ? { state: "idle" as const } : {}) };
+        }
+
+        return true;
+    }
+
     /** Проверки проекта (typecheck, тесты…) силами моста; null — проверять нечего или они выключены. */
     private async runChecks(): Promise<VerificationOutcome | null> {
         const { verifier, permissions } = this.deps;
@@ -640,6 +753,14 @@ export class GitHubTaskRunner {
         }
 
         await browser?.close(owner).catch(() => undefined);
+    }
+
+    /** В локальной ветке есть коммиты, которых нет на GitHub (или ветки там ещё нет). */
+    private async isAhead(branch: string): Promise<boolean> {
+        const remote = await this.git(["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}`]).catch(() => "");
+        const range = remote.trim() ? `refs/remotes/origin/${branch}..HEAD` : "HEAD";
+        const base = remote.trim() ? [] : ["--not", "--remotes=origin"];
+        return (await this.git(["rev-list", "--count", range, ...base]).catch(() => "0")).trim() !== "0";
     }
 
     private async isDirty(): Promise<boolean> {
@@ -950,14 +1071,34 @@ export function isTask(issue: GitHubIssue, label: string): boolean {
 /**
  * Служебный issue для задачи N: «/justai #3», «/justai continue #3» (правка или продолжение), «/justai stop #3» (остановить).
  */
-export function followUpCommand(issue: GitHubIssue, label: string): { target: number; action: "stop" | "continue" } | null {
-    const match = new RegExp(`^\\s*/${escapeRegExp(label)}\\s+(?:(stop|pause|continue)\\s+)?#(\\d+)\\s*$`, "im").exec(issue.body);
+export function followUpCommand(issue: GitHubIssue, label: string): { target: number; action: "stop" | "continue" | "merge" } | null {
+    const match = new RegExp(`^\\s*/${escapeRegExp(label)}\\s+(?:(stop|pause|continue|merge)\\s+)?#(\\d+)\\s*$`, "im").exec(issue.body);
 
     if (!match) {
         return null;
     }
 
-    return { target: Number(match[2]), action: match[1] === "stop" || match[1] === "pause" ? "stop" : "continue" };
+    const action = match[1] === "stop" || match[1] === "pause" ? "stop" : match[1] === "merge" ? "merge" : "continue";
+    return { target: Number(match[2]), action };
+}
+
+/** Комментарий-команда «/justai merge» отдельной строкой: слить PR задачи. */
+export function isMergeCommand(body: string, label: string): boolean {
+    return new RegExp(`^\\s*/${escapeRegExp(label)}\\s+merge\\s*$`, "im").test(body);
+}
+
+/**
+ * Зависимости задачи: строки «Depends on #3, #4» или «Зависит от #3» в начале строки.
+ * Задача начнётся, когда эти issues закроются (слияние их PR закрывает их).
+ */
+export function dependsOn(body: string): number[] {
+    const numbers = new Set<number>();
+
+    for (const line of body.matchAll(/^\s*[-*]?\s*\**(?:depends on|зависит от)\**\s*:?\s*(.+)$/gim)) {
+        for (const ref of line[1]!.matchAll(/#(\d+)/g)) numbers.add(Number(ref[1]));
+    }
+
+    return [...numbers];
 }
 
 /** Номер задачи, к которой этот issue — правка или команда, иначе null. */

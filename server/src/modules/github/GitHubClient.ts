@@ -130,6 +130,15 @@ export class GitHubClient {
         return toPull(await this.request<RawPull>(`${this.base}/pulls`, { method: "POST", body: { head, base, title, body } }));
     }
 
+    /** Слить PR. 405 — не готов к слиянию (конфликт, обязательные проверки), 409 — ветка изменилась. */
+    public async mergePullRequest(number: number, title: string, method: "squash" | "merge" | "rebase" = "squash"): Promise<void> {
+        await this.request(`${this.base}/pulls/${number}/merge`, { method: "PUT", body: { merge_method: method, commit_title: title } });
+    }
+
+    public async deleteBranch(branch: string): Promise<void> {
+        await this.request(`${this.base}/git/refs/heads/${refPath(branch)}`, { method: "DELETE" });
+    }
+
     /** Дифф PR в формате unified diff (для ревью планировщиком). */
     public async pullRequestDiff(number: number): Promise<string> {
         return this.request<string>(`${this.base}/pulls/${number}`, { accept: "application/vnd.github.diff" });
@@ -150,7 +159,7 @@ export class GitHubClient {
 
     private async ensureBranch(branch: string): Promise<void> {
         try {
-            await this.request(`${this.base}/git/ref/heads/${encodeURIComponent(branch)}`);
+            await this.request(`${this.base}/git/ref/heads/${refPath(branch)}`);
             return;
         }
         catch (error) {
@@ -158,7 +167,7 @@ export class GitHubClient {
         }
 
         const base = await this.defaultBranch();
-        const head = await this.request<{ object: { sha: string } }>(`${this.base}/git/ref/heads/${encodeURIComponent(base)}`);
+        const head = await this.request<{ object: { sha: string } }>(`${this.base}/git/ref/heads/${refPath(base)}`);
         await this.request(`${this.base}/git/refs`, { method: "POST", body: { ref: `refs/heads/${branch}`, sha: head.object.sha } });
     }
 
@@ -228,4 +237,9 @@ function toIssue(raw: RawIssue): GitHubIssue {
 
 function toPull(raw: RawPull): GitHubPullRequest {
     return { number: raw.number, url: raw.html_url, head: raw.head.ref, state: raw.state };
+}
+
+/** Имя ветки в пути API: слэши остаются (`justai/issue-5`), остальное кодируется. */
+function refPath(branch: string): string {
+    return branch.split("/").map(encodeURIComponent).join("/");
 }

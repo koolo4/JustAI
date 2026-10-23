@@ -445,6 +445,10 @@ export class Container {
                     ...(process.env.JUSTAI_GITHUB_EXECUTOR ? { executorProvider: process.env.JUSTAI_GITHUB_EXECUTOR } : {}),
                     pollMs: (Number(process.env.JUSTAI_GITHUB_POLL_SEC) || 60) * 1000,
                     allowPublic: process.env.JUSTAI_GITHUB_ALLOW_PUBLIC === "on",
+                    merge: process.env.JUSTAI_GITHUB_MERGE !== "off",
+                    ...(["merge", "rebase"].includes(process.env.JUSTAI_GITHUB_MERGE_METHOD ?? "")
+                        ? { mergeMethod: process.env.JUSTAI_GITHUB_MERGE_METHOD as "merge" | "rebase" }
+                        : {}),
                     token: process.env.JUSTAI_GITHUB_TOKEN ?? "",
                 },
                 log: message => this.logger.info(message),
