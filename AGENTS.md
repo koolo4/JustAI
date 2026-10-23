@@ -12,6 +12,9 @@ npm workspaces: один `npm install` в корне, один `package-lock.jso
 - `docs/` — документация, ADR (`docs/decisions.md`), changelog, `api.md`
 - `.justai/` — локальное состояние сервера (токен, сессии). В git не попадает, агентским инструментам недоступно.
 
+## Быстрый запуск
+`start-justai.cmd` в корне (двойной клик): при первом запуске `npm install`, затем Ollama с параметрами ниже (если установлена и не запущена), окна «JustAI — сервер» и «JustAI — интерфейс», браузер на http://localhost:3000. Настройки не меняет. Остановить — закрыть оба окна. Скрипт: `scripts/start-justai.ps1` (UTF-8 с BOM — иначе Windows PowerShell 5.1 портит кириллицу).
+
 ## Команды (из корня)
 ```bash
 npm install
