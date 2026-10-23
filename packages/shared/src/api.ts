@@ -74,6 +74,24 @@ export interface OpenWorkspaceRequest {
     path: string;
 }
 
+/** Ошибка компилятора или линтера (GET /api/workspace/diagnostics). */
+export interface DiagnosticItem {
+    /** Путь от корня проекта через «/». */
+    path: string;
+    line: number;
+    column: number;
+    severity: "error" | "warning";
+    code?: string;
+    message: string;
+}
+
+export interface DiagnosticsResponse {
+    checks: Array<{ cwd: string; command: string; ok: boolean }>;
+    diagnostics: DiagnosticItem[];
+    /** Вывод упавших проверок, если ошибки не удалось разобрать построчно. */
+    unparsed: string;
+}
+
 /** Настройка из интерфейса (переменная окружения сервера). */
 export interface SettingField {
     key: string;

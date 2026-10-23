@@ -193,8 +193,14 @@ export class PermissionService {
 
                 const command = commandOf(input);
 
+                // Инструмент без явной команды (например, diagnostics запускает проверки проекта):
+                // в full-auto разрешён, иначе — вопрос, ответ «на сессию» запоминается.
                 if (command === null) {
-                    return { action: "ask", reason: "runs a program", dangerous: false, sessionKey: `tool:${tool.name}` };
+                    const key = `tool:${tool.name}`;
+
+                    return mode === "full-auto" || allowed.has(key)
+                        ? { action: "allow", reason: mode === "full-auto" ? "allowed in full-auto mode" : "allowed for this session", dangerous: false }
+                        : { action: "ask", reason: "runs a program", dangerous: false, sessionKey: key };
                 }
 
                 const rules = await this.readRules();

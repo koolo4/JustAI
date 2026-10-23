@@ -83,6 +83,10 @@ describe("PermissionService", () => {
         ["full-auto", runTool, { command: "rm -rf dist" }, false],
         ["full-auto", runTool, { command: "cmd /c \"rd /s /q C:\\\"" }, false],
         ["full-auto", netTool, {}, false],
+        // Инструмент без поля command (diagnostics): в full-auto разрешён, иначе вопрос.
+        ["ask", tool("diagnostics", "execute"), {}, false],
+        ["auto-edit", tool("diagnostics", "execute"), {}, false],
+        ["full-auto", tool("diagnostics", "execute"), {}, true],
     ])("mode %s: %s %j → auto %s", async (mode, target, input, expected) => {
         expect(await autoAllowed(mode, target, input)).toBe(expected);
     });

@@ -24,6 +24,7 @@
 | POST | `/api/agent/sessions/:id/revert` | Тело `{ paths? }` (без него — все файлы). `{ files }` — откат к снапшоту; `409`, если агент работает или нет git |
 | GET | `/api/settings` | `{ fields }` — настраиваемые переменные; ключи только маской `••••abcd` |
 | PUT | `/api/settings` | Тело `{ values: { NAME: "value" \| null } }` (`null` — вернуть значение из `server/.env`). `202`, затем сервер пересобирается с новыми настройками; `400` — неизвестная переменная или неверное значение; `409` — агент работает |
+| GET | `/api/workspace/diagnostics` | `{ checks, diagnostics, unparsed }` — запуск typecheck/lint проекта и разобранные ошибки `{ path, line, column, severity, code?, message }` |
 | GET | `/api/workspace/info` | `{ root, name, recent, switchable }` — текущая папка проекта и недавние |
 | POST | `/api/workspace/open` | Тело `{ path }` (абсолютный путь к папке). `202` и новая информация, затем сервер перезапускается на этой папке (токен прежний); `400` — папка не найдена/недопустима; `409` — агент работает |
 | POST | `/api/agent/sessions/:id/accept` | `204` — принять изменения: снапшот забывается, откат больше невозможен; `409`, если агент работает или нет git |

@@ -128,6 +128,7 @@ export function App() {
                         onSave={path => void editor.save(path)}
                         onTakeDisk={editor.takeDisk}
                         onKeepMine={editor.keepMine}
+                        onOpenFile={handleSelect}
                     />
                     )}
                     </PanelBoundary>

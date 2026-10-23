@@ -173,6 +173,19 @@ export class Server {
 
         }
 
+        // Ошибки компилятора и линтера для редактора (те же проверки, что у инструмента diagnostics).
+        this.app.get(
+            '/api/workspace/diagnostics',
+            (req, res, next) => {
+                const controller = new AbortController();
+                res.on('close', () => controller.abort());
+
+                this.container.diagnostics.run(controller.signal)
+                    .then(result => res.json(result))
+                    .catch(next);
+            },
+        );
+
         const workspaceRouter =
             createWorkspaceRouter(
                 this.container.workspaceController,

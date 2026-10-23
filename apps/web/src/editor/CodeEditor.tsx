@@ -1,9 +1,13 @@
 import "./monacoSetup";
 
 import Editor, { type OnMount } from "@monaco-editor/react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
+import type { DiagnosticsResponse } from "@justai/shared";
+
+import { apiFetch, readApiError } from "../services/http";
 import { languageFor } from "./monacoSetup";
+import { ProblemsPanel } from "./ProblemsPanel";
 import { isDirty, type EditorTab } from "./useEditorTabs";
 
 interface Props {
@@ -15,6 +19,8 @@ interface Props {
     onSave(path: string): void;
     onTakeDisk(path: string): void;
     onKeepMine(path: string): void;
+    /** Открыть файл (из списка ошибок). */
+    onOpenFile(path: string): void;
 }
 
 export function CodeEditor(props: Props) {
@@ -63,6 +69,89 @@ export function CodeEditor(props: Props) {
     };
 
     useEffect(syncEol, [active, tab?.baseline]);
+
+    // Ошибки компилятора и линтера: подсветка в открытых файлах и список под редактором.
+    const [problems, setProblems] = useState<DiagnosticsResponse | null>(null);
+    const [showProblems, setShowProblems] = useState(false);
+    const [checking, setChecking] = useState(false);
+    const [problemsError, setProblemsError] = useState("");
+    const pendingReveal = useRef<{ path: string; line: number; column: number } | null>(null);
+
+    async function runCheck() {
+        setShowProblems(true);
+        setChecking(true);
+        setProblemsError("");
+
+        try {
+            const response = await apiFetch("/workspace/diagnostics");
+
+            if (!response.ok) {
+                throw new Error(await readApiError(response));
+            }
+
+            setProblems(await response.json() as DiagnosticsResponse);
+        }
+        catch (reason) {
+            setProblemsError(reason instanceof Error ? reason.message : String(reason));
+        }
+        finally {
+            setChecking(false);
+        }
+    }
+
+    useEffect(() => {
+        const monaco = monacoRef.current;
+
+        if (!monaco) {
+            return;
+        }
+
+        for (const model of monaco.editor.getModels()) {
+            const modelPath = model.uri.path.replace(/^\//, "");
+            const markers = (problems?.diagnostics ?? [])
+                .filter(item => item.path === modelPath)
+                .map(item => ({
+                    startLineNumber: item.line,
+                    startColumn: item.column,
+                    endLineNumber: item.line,
+                    endColumn: model.getLineMaxColumn(Math.min(item.line, model.getLineCount())),
+                    message: item.code ? `${item.message} (${item.code})` : item.message,
+                    severity: item.severity === "error" ? monaco.MarkerSeverity.Error : monaco.MarkerSeverity.Warning,
+                }));
+
+            monaco.editor.setModelMarkers(model, "justai", markers);
+        }
+    }, [problems, active, tabs.length]);
+
+    // Переход к строке после открытия файла из списка ошибок.
+    useEffect(() => {
+        const target = pendingReveal.current;
+        const editor = editorRef.current;
+
+        if (!target || target.path !== active || !editor) {
+            return;
+        }
+
+        pendingReveal.current = null;
+        editor.revealLineInCenter(target.line);
+        editor.setPosition({ lineNumber: target.line, column: target.column });
+        editor.focus();
+    }, [active, tab?.value]);
+
+    function openProblem(path: string, line: number, column: number) {
+        pendingReveal.current = { path, line, column };
+
+        if (path === active) {
+            editorRef.current?.revealLineInCenter(line);
+            editorRef.current?.setPosition({ lineNumber: line, column });
+            pendingReveal.current = null;
+            return;
+        }
+
+        props.onOpenFile(path);
+    }
+
+    const problemCount = problems?.diagnostics.length ?? 0;
 
     if (tabs.length === 0) {
         return (
@@ -120,6 +209,14 @@ export function CodeEditor(props: Props) {
                         >
                             {tab.saving ? "Saving…" : "Save"}
                         </button>
+                        <button
+                            className="secondary-button"
+                            disabled={checking}
+                            title="Run the project's type-check and lint commands"
+                            onClick={() => void runCheck()}
+                        >
+                            {checking ? "Checking…" : problems ? `Problems (${problemCount})` : "Check problems"}
+                        </button>
                     </div>
 
                     {tab.conflict !== null && (
@@ -151,6 +248,16 @@ export function CodeEditor(props: Props) {
                             }}
                         />
                     </div>
+
+                    {showProblems && (
+                        <ProblemsPanel
+                            result={problems}
+                            running={checking}
+                            error={problemsError}
+                            onOpen={openProblem}
+                            onClose={() => setShowProblems(false)}
+                        />
+                    )}
                 </>
             )}
         </div>

@@ -46,6 +46,8 @@ import { createSearchTools } from "../modules/agent/tools/searchTools.js";
 import { createCodeSearchTool } from "../modules/agent/tools/codeSearchTool.js";
 import { CodeIndex } from "../modules/agent/index/CodeIndex.js";
 import { OpenAIEmbedder } from "../modules/agent/index/OpenAIEmbedder.js";
+import { DiagnosticsService } from "../modules/agent/diagnostics/Diagnostics.js";
+import { createDiagnosticsTool } from "../modules/agent/tools/diagnosticsTool.js";
 import { createShellTools } from "../modules/agent/tools/shellTools.js";
 import { ProcessManager } from "../infrastructure/process/ProcessManager.js";
 import { PermissionService } from "../modules/agent/permissions/PermissionService.js";
@@ -97,6 +99,8 @@ export class Container {
         IntegrationsController;
 
     private codeIndex?: CodeIndex;
+
+    public readonly diagnostics: DiagnosticsService;
 
     private readonly configService: ConfigService;
     private readonly logger: ILogger;
@@ -242,6 +246,13 @@ export class Container {
                     : {},
             );
 
+        this.diagnostics =
+            new DiagnosticsService(
+                this.processManager,
+                this.workspaceRoot,
+                Number(process.env.JUSTAI_VERIFY_TIMEOUT_MS) || 300_000,
+            );
+
         const snapshots =
             new SnapshotService(
                 this.gitService,
@@ -260,6 +271,7 @@ export class Container {
                 return this.codeIndex;
             }),
             ...createShellTools(agentFiles, this.processManager),
+            createDiagnosticsTool(this.diagnostics),
             ...createGitTools(this.gitService, this.workspaceRoot),
             createTodoTool(),
             ...createWebTools(),
