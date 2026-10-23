@@ -65,7 +65,8 @@ describe("GitHub tools (architect)", () => {
         const [create, list, , changes] = createGitHubTools(() => client, () => "justai");
 
         expect(await create!.run({ title: "Add login", body: "Use React and add tests." }, context)).toContain("#9");
-        expect(calls[0]!.body).toEqual({ title: "Add login", body: "Use React and add tests.", labels: ["justai"] });
+        // Строка «/justai» — на случай, если GitHub молча не поставит метку.
+        expect(calls[0]!.body).toEqual({ title: "Add login", body: "Use React and add tests.\n\n/justai", labels: ["justai"] });
         expect(await list!.run({}, context)).toContain("#5 [review (pull request ready)] Add page");
 
         await changes!.run({ issue: 5, comment: "Rename the button." }, context);

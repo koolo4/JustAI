@@ -84,7 +84,8 @@ export function createFileTools(
         name: "edit_file",
         description: [
             "Applies one or more exact text replacements to a workspace file. Edits are applied in order and atomically: if any edit fails, nothing is written.",
-            "Each old_string must match the current text exactly (including indentation) and be unique unless replace_all is true.",
+            "Each old_string must match the current text exactly (including indentation) and be unique.",
+            "To insert text, include the neighbouring line in old_string and keep it in new_string. To add text at the end of a file, use write_file with append=true.",
             "Do not include the line-number prefixes from read_file. Line endings and encoding of the file are preserved automatically.",
             "The file must have been read with read_file first.",
         ].join(" "),
@@ -93,7 +94,9 @@ export function createFileTools(
             edits: z.array(z.object({
                 old_string: z.string().min(1).describe("Exact text to replace."),
                 new_string: z.string().describe("Replacement text."),
-                replace_all: z.boolean().default(false).describe("Replace every occurrence."),
+                replace_all: z.boolean().default(false).describe("Replace every occurrence. Rarely needed: only together with expected_count."),
+                expected_count: z.number().int().min(2).optional()
+                    .describe("With replace_all: how many occurrences you expect to change. Required when old_string occurs more than once."),
             })).min(1),
         }),
         kind: "write",
@@ -128,10 +131,26 @@ export function createFileTools(
                     }
                 }
 
+                // Повтор уже сделанной правки (модель не заметила, что она применена): второй раз она портит файл —
+                // дублирует блок или удаляет соседний код.
+                if (isSubstantial(newText) && !newText.includes(oldText.trim())) {
+                    const present = text.includes(newText) || looseMatches(text, newText).length > 0;
+
+                    if (present) {
+                        throw new ToolError(occurrences === 0
+                            ? `${label}new_string is already in ${file} — this edit looks applied already. Nothing was written. Read the file to see its current state.`
+                            : `${label}new_string is already in ${file}; replacing old_string with it would duplicate that text and delete old_string. If you meant to insert, keep old_string inside new_string. Nothing was written.`);
+                    }
+                }
+
                 // Ещё чаще: модель «склеила» строки или поменяла отступы. Сопоставляем без учёта пробелов,
-                // но только однозначно (одно место или replace_all).
+                // но только однозначно (одно место или replace_all с подтверждённым числом).
                 if (occurrences === 0) {
                     const loose = looseMatches(text, oldText);
+
+                    if (loose.length > 1 && edit.replace_all && edit.expected_count !== loose.length) {
+                        throw new ToolError(`${label}old_string matches ${loose.length} places in ${file} (ignoring whitespace). Add surrounding context to change one place. Nothing was written.`);
+                    }
 
                     if (loose.length === 1 || (loose.length > 1 && edit.replace_all)) {
                         for (const match of [...loose].reverse()) {
@@ -149,11 +168,19 @@ export function createFileTools(
                     const hint = /\\[nt]/.test(edit.old_string)
                         ? " Note: old_string contains the two characters \\n; a line break must be a real newline (\"\\n\" in JSON)."
                         : "";
-                    throw new ToolError(`${label}old_string was not found in ${file}. Read the file again and copy the text exactly.${hint} Nothing was written.`);
+                    const closest = closestSnippet(text, oldText);
+                    throw new ToolError([
+                        `${label}old_string was not found in ${file}. Nothing was written.${hint}`,
+                        closest
+                            ? `The closest text in the file is below (line numbers are not part of the text). Copy old_string from it exactly:\n${closest}`
+                            : "Read the file again and copy the text exactly.",
+                    ].join("\n"));
                 }
 
-                if (occurrences > 1 && !edit.replace_all) {
-                    throw new ToolError(`${label}old_string occurs ${occurrences} times in ${file}. Add surrounding context to make it unique, or set replace_all. Nothing was written.`);
+                // replace_all по нескольким местам — только с подтверждённым числом: иначе маленькая модель
+                // меняет «display: flex» во всём файле, когда нужно в одном правиле.
+                if (occurrences > 1 && (!edit.replace_all || edit.expected_count !== occurrences)) {
+                    throw new ToolError(`${label}old_string occurs ${occurrences} times in ${file}. To change one place, add surrounding lines (for example the selector or function name) to make it unique. Only if every one of them must change, set replace_all=true and expected_count=${occurrences}. Nothing was written.`);
                 }
 
                 text = edit.replace_all
@@ -171,14 +198,46 @@ export function createFileTools(
 
     const writeFile = defineTool({
         name: "write_file",
-        description: "Creates a new file or replaces the whole content of an existing one (an existing file must be read first). Prefer edit_file for changes to existing files.",
+        description: [
+            "Creates a new file or replaces the whole content of an existing one (an existing file must be read first).",
+            "append=true adds content to the end of an existing file instead. Prefer edit_file for changes inside existing files.",
+        ].join(" "),
         inputSchema: z.object({
             path: z.string().describe("Workspace-relative file path."),
-            content: z.string().describe("Full file content."),
+            content: z.string().describe("Full file content (or, with append=true, the text to add at the end)."),
+            append: z.boolean().default(false).describe("Add content to the end of the existing file."),
+            confirm_shrink: z.boolean().default(false)
+                .describe("Set only if you really mean to replace a file with much shorter content (most of it will be deleted)."),
         }),
         kind: "write",
-        run: async ({ path: file, content }, context) => {
+        run: async ({ path: file, content: input, append, confirm_shrink }, context) => {
+            let content = input;
+
+            if (append) {
+                const { state } = await files.readForEdit(context.sessionId, file);
+                const separator = state.text === "" || state.text.endsWith("\n") ? "" : "\n";
+                content = `${state.text}${separator}${input.replace(/\r\n/g, "\n")}`;
+            }
+            else if (!confirm_shrink) {
+                // «Допиши в конец» маленькая модель выполняет как перезапись файла этим кусочком — остальное теряется.
+                const existing = await files.readForEdit(context.sessionId, file).then(result => result.state.text, () => null);
+                const oldLines = existing?.split("\n").length ?? 0;
+                const newLines = content.split("\n").length;
+
+                if (existing !== null && oldLines >= 30 && newLines < oldLines / 2) {
+                    throw new ToolError([
+                        `This would replace ${file} (${oldLines} lines) with ${newLines} lines and delete the rest. Nothing was written.`,
+                        "To add text to the end, call write_file with append=true. To change a part, use edit_file.",
+                        "Only if the whole file really must become this shorter content, call again with confirm_shrink=true.",
+                    ].join(" "));
+                }
+            }
+
             const result = await files.write(context.sessionId, file, content);
+
+            if (append) {
+                return `Appended ${input.split("\n").length} lines to ${file}.\n\n${result.diff}`;
+            }
 
             return result.created
                 ? `Created ${file} (${content.split("\n").length} lines).`
@@ -191,6 +250,34 @@ export function createFileTools(
 
 function unescapeWhitespace(text: string): string {
     return text.replace(/\\n/g, "\n").replace(/\\t/g, "\t");
+}
+
+/** Достаточно длинный текст, чтобы его повторное появление в файле не было случайным. */
+function isSubstantial(text: string): boolean {
+    return text.split("\n").filter(line => line.trim()).length >= 2 && text.trim().length >= 40;
+}
+
+/**
+ * Где в файле, скорее всего, то, что искала модель: строка, совпадающая с первой непустой строкой old_string
+ * (без учёта отступов), и столько же строк дальше — с номерами, чтобы модель скопировала настоящий текст.
+ */
+export function closestSnippet(text: string, oldText: string): string | null {
+    const wanted = oldText.split("\n").map(line => line.trim()).filter(Boolean);
+    const first = wanted[0];
+
+    if (!first) return null;
+
+    const lines = text.split("\n");
+    const starts = lines.map((line, index) => ({ line: line.trim(), index })).filter(item => item.line === first || (first.length >= 8 && item.line.includes(first)));
+
+    if (starts.length === 0 || starts.length > 3) return null;
+
+    const span = Math.min(Math.max(wanted.length + 4, 6), 40);
+
+    return starts.map(({ index }) => lines
+        .slice(index, index + span)
+        .map((line, offset) => `${index + offset + 1}\t${line}`)
+        .join("\n")).join("\n…\n");
 }
 
 /**

@@ -166,14 +166,49 @@ describe("file tools", () => {
             .rejects.toThrow(/was not found/);
     });
 
-    it("refuses ambiguous edits unless replace_all, keeps $ literal", async () => {
+    it("refuses ambiguous edits unless replace_all with the expected count, keeps $ literal", async () => {
         await run("read_file", { path: "src/a.ts" });
 
         await expect(run("edit_file", { path: "src/a.ts", edits: [{ old_string: "line", new_string: "x" }] }))
             .rejects.toThrow(/occurs 3 times/);
+        // replace_all без подтверждённого числа — отказ: так модель меняла «display: flex» во всём файле.
+        await expect(run("edit_file", { path: "src/a.ts", edits: [{ old_string: "line", new_string: "x", replace_all: true }] }))
+            .rejects.toThrow(/expected_count=3/);
 
-        await run("edit_file", { path: "src/a.ts", edits: [{ old_string: "line", new_string: "$&-", replace_all: true }] });
+        await run("edit_file", { path: "src/a.ts", edits: [{ old_string: "line", new_string: "$&-", replace_all: true, expected_count: 3 }] });
         expect(await disk("src/a.ts")).toBe("$&-1\r\n$&-2\r\n$&-3\r\n");
+    });
+
+    it("refuses to apply an edit twice and shows the closest real text when old_string is wrong", async () => {
+        await workspace.write("page.css", "#stub {\n    display: flex;\n    padding: 2rem;\n}\n\n#other {\n    color: red;\n}\n");
+        await run("read_file", { path: "page.css" });
+
+        const wrapped = "#stub {\n    display: none;\n    padding: 2rem;\n}\n\n#stub.on {\n    display: flex;\n}";
+        await run("edit_file", { path: "page.css", edits: [{ old_string: "#stub {\n    display: flex;\n    padding: 2rem;\n}", new_string: wrapped }] });
+
+        // Та же правка ещё раз: new_string уже в файле — ничего не пишется.
+        await expect(run("edit_file", { path: "page.css", edits: [{ old_string: "#stub {\n    display: flex;\n    padding: 2rem;\n}", new_string: wrapped }] }))
+            .rejects.toThrow(/already/);
+
+        // Выдуманное правило: показывается настоящий текст вокруг «#other {».
+        await expect(run("edit_file", { path: "page.css", edits: [{ old_string: "#other {\n    color: blue;\n}", new_string: "#other {}" }] }))
+            .rejects.toThrow(/closest text[\s\S]*\d+\t {4}color: red;/);
+    });
+
+    it("appends with write_file and refuses to shrink a long file by accident", async () => {
+        const long = Array.from({ length: 40 }, (_, index) => `line ${index + 1}`).join("\n");
+        await workspace.write("long.txt", `${long}\n`);
+        await run("read_file", { path: "long.txt" });
+
+        await expect(run("write_file", { path: "long.txt", content: "tail\n" })).rejects.toThrow(/append=true/);
+        expect(await disk("long.txt")).toBe(`${long}\n`);
+
+        await run("write_file", { path: "long.txt", content: "tail\n", append: true });
+        expect(await disk("long.txt")).toBe(`${long}\ntail\n`);
+
+        await run("read_file", { path: "long.txt" });
+        await run("write_file", { path: "long.txt", content: "short\n", confirm_shrink: true });
+        expect(await disk("long.txt")).toBe("short\n");
     });
 
     it("preserves BOM on overwrite", async () => {

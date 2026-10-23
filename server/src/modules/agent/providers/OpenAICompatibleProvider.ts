@@ -289,6 +289,12 @@ export function toChatMessages(system: string, messages: Message[]): ChatComplet
                     : null)
                 .filter(call => call !== null);
 
+            // Пустой ответ модели (ни текста, ни вызовов): content: null без tool_calls Ollama отклоняет
+            // («invalid message content type: <nil>»), и сессия перестаёт работать навсегда — такой ход не отправляем.
+            if (!text && toolCalls.length === 0) {
+                continue;
+            }
+
             result.push({
                 role: "assistant",
                 content: text || null,

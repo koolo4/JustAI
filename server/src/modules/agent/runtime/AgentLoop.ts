@@ -105,9 +105,8 @@ export class AgentLoop {
 
     private planNudges = 0;
 
-    private lastFailedCall: string | undefined;
-
-    private repeatedFailures = 0;
+    /** Неудачные вызовы (инструмент + вход) → сколько раз провалились с последнего успешного изменения. */
+    private readonly failedCalls = new Map<string, number>();
 
     constructor(
         private readonly options: AgentLoopOptions,
@@ -294,7 +293,7 @@ export class AgentLoop {
             const nudge: ContentBlock[] = repeats > 0 && repeats % REPEAT_HINT_EVERY === 0
                 ? [{
                     type: "text",
-                    text: `[JustAI] You have made the same failing ${toolUses[0]!.name} call ${repeats} times in a row. Repeating it will not work. Change the approach: read the exact lines again and copy them with their line breaks and indentation, make a smaller edit (one line or one element), or rewrite the whole file with write_file.`,
+                    text: `[JustAI] You have made the same failing ${toolUses[0]!.name} call ${repeats} times. Repeating it will not work (for edit_file: that text is not in the file in that form). Change the approach: read the exact lines again (read_file with offset/limit around the place) and copy them character for character, make a smaller edit (one line), or rewrite the whole file with write_file.`,
                 }]
                 : [];
 
@@ -474,21 +473,31 @@ export class AgentLoop {
         return results;
     }
 
-    /** Сколько раз подряд повторяется один и тот же неудачный вызов (0 — последний шаг не такой). */
+    /**
+     * Сколько раз уже провалился такой же вызов (0 — на этом шаге провалов нет).
+     * Чтение между попытками («прочитать → та же правка → прочитать…») счёт не сбрасывает —
+     * только успешное действие, которое что-то меняет (правка, запись, команда).
+     */
     private trackRepeatedFailure(toolUses: ToolUseBlock[], results: ToolResultBlock[]): number {
-        const single = toolUses.length === 1 ? toolUses[0]! : undefined;
-        const failed = single && results.find(result => result.toolUseId === single.id)?.isError === true;
+        let worst = 0;
 
-        if (!single || !failed) {
-            this.lastFailedCall = undefined;
-            this.repeatedFailures = 0;
-            return 0;
+        for (const use of toolUses) {
+            const result = results.find(item => item.toolUseId === use.id);
+
+            if (!result) continue;
+
+            if (!result.isError) {
+                if (this.findTool(use.name)?.kind !== "read") this.failedCalls.clear();
+                continue;
+            }
+
+            const key = `${use.name}:${JSON.stringify(use.input)}`;
+            const count = (this.failedCalls.get(key) ?? 0) + 1;
+            this.failedCalls.set(key, count);
+            worst = Math.max(worst, count);
         }
 
-        const key = `${single.name}:${JSON.stringify(single.input)}`;
-        this.repeatedFailures = key === this.lastFailedCall ? this.repeatedFailures + 1 : 1;
-        this.lastFailedCall = key;
-        return this.repeatedFailures;
+        return worst;
     }
 
     /**

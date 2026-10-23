@@ -318,6 +318,20 @@ describe("toChatMessages", () => {
             { role: "user", content: "and continue" },
         ]);
     });
+
+    it("drops empty assistant replies: Ollama rejects content null without tool calls", () => {
+        const history: Message[] = [
+            { id: "1", role: "user", createdAt: "", content: [{ type: "text", text: "do it" }] },
+            { id: "2", role: "assistant", createdAt: "", content: [] },
+            { id: "3", role: "user", createdAt: "", content: [{ type: "text", text: "Your reply was empty" }] },
+        ];
+
+        expect(toChatMessages("sys", history)).toEqual([
+            { role: "system", content: "sys" },
+            { role: "user", content: "do it" },
+            { role: "user", content: "Your reply was empty" },
+        ]);
+    });
 });
 
 describe("ProviderRegistry presets", () => {

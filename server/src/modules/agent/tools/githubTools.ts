@@ -36,9 +36,16 @@ export function createGitHubTools(client: () => GitHubClient | null, label: () =
         }),
         kind: "network",
         run: async ({ title, body, depends_on }) => {
-            const full = depends_on?.length ? `${body.trim()}\n\nDepends on ${depends_on.map(number => `#${number}`).join(", ")}` : body;
+            // Строка «/justai» — задача для исполнителя, даже если GitHub молча не поставил метку (у токена нет Issues: write).
+            const full = [
+                body.trim(),
+                ...(depends_on?.length ? ["", `Depends on ${depends_on.map(number => `#${number}`).join(", ")}`] : []),
+                "",
+                `/${label()}`,
+            ].join("\n");
             const issue = await github().createIssue(title, full, [label()]);
-            return `Created task #${issue.number}: ${issue.url}${depends_on?.length ? ` (starts after ${depends_on.map(number => `#${number}`).join(", ")} are merged)` : ""}`;
+            const unlabeled = issue.labels.includes(label()) ? "" : ` (GitHub did not apply the label "${label()}" — the token probably lacks Issues: write; the task is still picked up by the /${label()} line)`;
+            return `Created task #${issue.number}: ${issue.url}${unlabeled}${depends_on?.length ? ` (starts after ${depends_on.map(number => `#${number}`).join(", ")} are merged)` : ""}`;
         },
     });
 

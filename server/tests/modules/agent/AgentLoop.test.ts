@@ -211,6 +211,18 @@ describe("AgentLoop", () => {
         expect(third.content.at(-1)).toMatchObject({ type: "text", text: expect.stringContaining("same failing fail call 3 times") });
     });
 
+    it("keeps counting a repeated failing call when the model reads in between", async () => {
+        // «Прочитать → та же неудачная правка → прочитать…» — так модель тратила все 100 шагов.
+        const failing = { toolCalls: [{ name: "fail", input: {} }] };
+        const reading = { toolCalls: [{ name: "echo", input: { text: "file" } }] };
+        const { loop, provider } = setup([...Array.from({ length: 6 }, () => [failing, reading]).flat(), { text: "never reached" }]);
+
+        const result = await loop.run([createMessage("user", [{ type: "text", text: "go" }])]);
+
+        expect(result).toMatchObject({ status: "failed", reason: expect.stringContaining("6 times") });
+        expect(provider.requests).toHaveLength(11);
+    });
+
     it("does not treat an empty reply as finished", async () => {
         const { loop, user, saved, provider } = setup([
             { text: "" },

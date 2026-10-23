@@ -431,7 +431,11 @@ export class GitHubTaskRunner {
 
             const details = await sessions.get(task.sessionId);
             const messages = details.messages.slice(startIndex);
-            const report = lastAssistantText(messages) || "(no report)";
+            const lastText = lastAssistantText(messages) || "(no report)";
+            // Незаконченный шаг: последний текст агента — не итог (часто там описание успеха, которого не было).
+            const report = details.session.status === "completed" || watch.stopped
+                ? lastText
+                : `_⚠ Агент не закончил (${details.session.lastError ?? details.session.status}). Ниже — последнее, что он написал; это не итог и может не совпадать с файлами._\n\n${lastText}`;
 
             if (kind === "test") {
                 await this.finishTest(issue, task, watch, details.session, messages, report);
@@ -474,12 +478,15 @@ export class GitHubTaskRunner {
             const checks = ok ? await this.runChecks() : null;
             if (checks) task.checks = checks.status;
             const screenshots = await this.uploadScreenshots(issue.number, messages);
+            // Что на самом деле изменилось в ветке — по git, чтобы отчёт агента можно было сверить.
+            const stat = (await this.git(["diff", "--stat", `refs/remotes/origin/${base}...HEAD`]).catch(() => "")).trim();
 
             await this.soft(client.comment(issue.number, [
                 ok ? "✅ **JustAI** finished this step." : "⚠️ **JustAI** could not complete this step.",
                 committed ? `Branch \`${branch}\`${task.pullRequest ? ` · pull request: ${task.pullRequest}` : ""}` : "No file changes were made.",
                 details.session.lastError ? `Error: ${details.session.lastError}` : "",
                 ...(checks ? ["", checksReport(checks)] : []),
+                ...(stat ? ["", "**Изменения в ветке** (по git, не со слов агента):", fenced(clip(stat, 2_000))] : []),
                 "",
                 "**Report:**",
                 clip(report, REPORT_CHARS),
