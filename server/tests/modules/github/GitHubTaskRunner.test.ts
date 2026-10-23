@@ -17,7 +17,7 @@ import { SessionStore } from "../../../src/modules/agent/runtime/SessionStore.js
 import { AgentFileSystem } from "../../../src/modules/agent/tools/AgentFileSystem.js";
 import { createFileTools } from "../../../src/modules/agent/tools/fileTools.js";
 import { ToolRegistry } from "../../../src/modules/agent/tools/ToolRegistry.js";
-import { BOT_MARKER, type GitHubClient, type GitHubComment, type GitHubIssue } from "../../../src/modules/github/GitHubClient.js";
+import { BOT_MARKER, GitHubError, type GitHubClient, type GitHubComment, type GitHubIssue } from "../../../src/modules/github/GitHubClient.js";
 import { followUpTarget, GitHubTaskRunner, isTask, LABELS, originMatches, stripCommands, taskPrompt } from "../../../src/modules/github/GitHubTaskRunner.js";
 
 const git = new GitService();
@@ -41,17 +41,27 @@ class FakeGitHub {
     public async listComments(number: number) { return this.comments.get(number) ?? []; }
 
     public async comment(number: number, body: string, asBot = true) {
+        this.deny();
         const list = this.comments.get(number) ?? [];
         list.push({ id: this.nextComment++, author: "me", body: asBot ? `${body}\n\n${BOT_MARKER}` : body, createdAt: "" });
         this.comments.set(number, list);
     }
 
+    /** Токен без права Issues: write — метки и комментарии отклоняются (403). */
+    public denyIssueWrites = false;
+
+    private deny() {
+        if (this.denyIssueWrites) throw new GitHubError(403, "Resource not accessible by personal access token");
+    }
+
     public async addLabels(number: number, labels: string[]) {
+        this.deny();
         const issue = this.issues.find(item => item.number === number)!;
         issue.labels = [...new Set([...issue.labels, ...labels])];
     }
 
     public async removeLabel(number: number, label: string) {
+        this.deny();
         const issue = this.issues.find(item => item.number === number)!;
         issue.labels = issue.labels.filter(item => item !== label);
     }
@@ -192,6 +202,17 @@ describe.skipIf(!git.available)("GitHubTaskRunner", () => {
         github.closed = [];
         await runner.check();
         expect(github.comments.get(11)).toHaveLength(2);
+    }, 60_000);
+
+    it("still delivers a pull request when the token cannot label or comment, and says why", async () => {
+        github.denyIssueWrites = true;
+        github.issue(20, "[justai] создай файл e.txt", "me", { labels: [] });
+
+        await runner.check();
+
+        expect(github.pulls).toEqual([expect.objectContaining({ head: "justai/issue-20" })]);
+        expect(runner.getStatus()).toMatchObject({ state: "idle", warning: expect.stringContaining("Issues: Read and write") });
+        expect(runner.getStatus().tasks[0]).toMatchObject({ issue: 20, status: "review" });
     }, 60_000);
 
     it("recognises task markers and follow-ups", () => {

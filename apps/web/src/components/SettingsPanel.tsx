@@ -148,6 +148,7 @@ interface GitHubInfo {
         currentIssue?: number;
         lastCheck?: string;
         lastError?: string;
+        warning?: string;
         tasks: Array<{ issue: number; status: "working" | "review" | "failed"; branch: string; pullRequest?: string }>;
     };
 }
@@ -212,6 +213,8 @@ function GitHubStatus() {
                     </span>
                 </div>
             )}
+
+            {runner?.warning && <p className="error-text setting-hint">⚠ {runner.warning}</p>}
 
             {runner?.tasks.map(task => (
                 <div key={task.issue} className="setting-row">

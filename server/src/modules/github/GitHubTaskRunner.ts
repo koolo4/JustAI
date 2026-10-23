@@ -6,7 +6,7 @@ import type { Message } from "@justai/shared";
 import type { GitService } from "../../infrastructure/git/GitService.js";
 import type { PermissionService } from "../agent/permissions/PermissionService.js";
 import type { SessionManager } from "../agent/runtime/SessionManager.js";
-import { BOT_MARKER, type GitHubClient, type GitHubComment, type GitHubIssue } from "./GitHubClient.js";
+import { BOT_MARKER, GitHubError, type GitHubClient, type GitHubComment, type GitHubIssue } from "./GitHubClient.js";
 
 export const LABELS = {
     working: "justai:working",
@@ -37,6 +37,8 @@ export interface GitHubRunnerStatus {
     currentIssue?: number;
     lastCheck?: string;
     lastError?: string;
+    /** Задачи выполняются, но что-то второстепенное не работает (например, нет прав на метки). */
+    warning?: string;
     tasks: Array<{ issue: number; status: TaskState["status"]; branch: string; pullRequest?: string }>;
 }
 
@@ -149,8 +151,8 @@ export class GitHubTaskRunner {
             state.followUps = [...state.followUps ?? [], issue.number];
             await this.save(state);
 
-            await client.comment(issue.number, `Принято как правка к задаче #${target}. Отчёт будет в #${target}.`).catch(() => undefined);
-            await client.closeIssue(issue.number).catch(() => undefined);
+            await this.soft(client.comment(issue.number, `Принято как правка к задаче #${target}. Отчёт будет в #${target}.`), "comments");
+            await this.soft(client.closeIssue(issue.number), "closing issues");
 
             const body = stripCommands(issue.body, config.label) || issue.title;
             await this.run(await client.getIssue(target), state, [{ id: 0, author: issue.author, body, createdAt: "" }]);
@@ -165,7 +167,7 @@ export class GitHubTaskRunner {
             if (!task) {
                 // Задачу могли пометить маркером в тексте (метку ставит не каждая интеграция) — метку ставим сами.
                 if (!issue.labels.includes(config.label)) {
-                    await client.addLabels(issue.number, [config.label]);
+                    await this.soft(client.addLabels(issue.number, [config.label]), "labels");
                 }
 
                 await this.run(issue, state, []);
@@ -205,12 +207,12 @@ export class GitHubTaskRunner {
         const branch = previous?.branch ?? `justai/issue-${issue.number}`;
         const base = await client.defaultBranch();
 
-        this.status = { ...this.status, state: "working", currentIssue: issue.number, lastError: undefined };
+        this.status = { ...this.status, state: "working", currentIssue: issue.number, lastError: undefined, warning: undefined };
         this.deps.log?.(`[github] issue #${issue.number}: ${feedback.length ? "feedback" : "new task"} → ${branch}`);
 
-        await client.addLabels(issue.number, [LABELS.working]);
-        await client.removeLabel(issue.number, LABELS.review);
-        await client.removeLabel(issue.number, LABELS.failed);
+        await this.soft(client.addLabels(issue.number, [LABELS.working]), "labels");
+        await this.soft(client.removeLabel(issue.number, LABELS.review), "labels");
+        await this.soft(client.removeLabel(issue.number, LABELS.failed), "labels");
 
         const task: TaskState = {
             sessionId: previous?.sessionId ?? "",
@@ -238,7 +240,7 @@ export class GitHubTaskRunner {
             }
 
             permissions.setUnattended(task.sessionId, true);
-            await sessions.send(task.sessionId, { text: feedback.length ? feedbackPrompt(issue, feedback, branch) : taskPrompt(issue, branch) });
+            await sessions.send(task.sessionId, { text: feedback.length ? feedbackPrompt(issue, feedback, branch) : taskPrompt(issue, branch, config.label) });
             await sessions.waitForIdle(task.sessionId);
 
             const details = await sessions.get(task.sessionId);
@@ -248,14 +250,14 @@ export class GitHubTaskRunner {
             if (committed) {
                 await this.push(branch);
                 const pull = await client.findPullRequest(branch)
-                    ?? await client.createPullRequest(branch, base, `JustAI: ${issue.title}`, `${clip(report, REPORT_CHARS)}\n\nCloses #${issue.number}\n\n${BOT_MARKER}`);
+                    ?? await client.createPullRequest(branch, base, `JustAI: ${cleanTitle(issue.title, this.deps.config.label)}`, `${clip(report, REPORT_CHARS)}\n\nCloses #${issue.number}\n\n${BOT_MARKER}`);
                 task.pullRequest = pull.url;
             }
 
             const ok = details.session.status === "completed" && (committed || Boolean(task.pullRequest));
             task.status = ok ? "review" : "failed";
 
-            await client.comment(issue.number, [
+            await this.soft(client.comment(issue.number, [
                 ok ? "✅ **JustAI** finished this step." : "⚠️ **JustAI** could not complete this step.",
                 committed ? `Branch \`${branch}\`${task.pullRequest ? ` · pull request: ${task.pullRequest}` : ""}` : "No file changes were made.",
                 details.session.lastError ? `Error: ${details.session.lastError}` : "",
@@ -264,9 +266,9 @@ export class GitHubTaskRunner {
                 clip(report, REPORT_CHARS),
                 "",
                 "_Reply in this issue to request changes — JustAI will continue on the same branch._",
-            ].join("\n"));
+            ].join("\n")), "comments");
 
-            await client.addLabels(issue.number, [ok ? LABELS.review : LABELS.failed]);
+            await this.soft(client.addLabels(issue.number, [ok ? LABELS.review : LABELS.failed]), "labels");
         }
         catch (error) {
             task.status = "failed";
@@ -280,6 +282,23 @@ export class GitHubTaskRunner {
             await this.git(["checkout", base]).catch(() => undefined);
             await this.save(state);
             this.status = { ...this.status, currentIssue: undefined, ...(this.status.state === "working" ? { state: "idle" as const } : {}) };
+        }
+    }
+
+    /**
+     * Метки и комментарии — дополнительная функция: без прав на них задача всё равно выполняется
+     * (ветка, коммит, pull request), а проблема показывается в статусе.
+     */
+    private async soft(action: Promise<unknown>, what: string): Promise<void> {
+        try {
+            await action;
+        }
+        catch (error) {
+            const hint = error instanceof GitHubError && error.status === 403
+                ? `No permission for ${what}: give the token \"Issues: Read and write\" (GitHub → Settings → Developer settings → Fine-grained tokens).`
+                : `Could not update ${what}: ${message(error)}`;
+            this.status = { ...this.status, warning: hint };
+            this.deps.log?.(`[github] ${hint}`);
         }
     }
 
@@ -317,7 +336,7 @@ export class GitHubTaskRunner {
             ? []
             : ["-c", "user.name=JustAI", "-c", "user.email=justai@users.noreply.github.com"];
 
-        await this.git([...identity, "commit", "-m", `JustAI: ${issue.title} (#${issue.number})`]);
+        await this.git([...identity, "commit", "-m", `JustAI: ${cleanTitle(issue.title, this.deps.config.label)} (#${issue.number})`]);
         return true;
     }
 
@@ -375,6 +394,11 @@ export class GitHubTaskRunner {
  * Задача для JustAI: метка, «[justai]» в начале заголовка или отдельная строка «/justai» в описании.
  * Маркеры нужны интеграциям, которым GitHub разрешает создавать issues, но не ставить метки.
  */
+/** Заголовок без служебной пометки «[justai]». */
+export function cleanTitle(title: string, label: string): string {
+    return title.replace(new RegExp(`^\\s*\\[${escapeRegExp(label)}\\]\\s*`, "i"), "").trim() || title;
+}
+
 export function isTask(issue: GitHubIssue, label: string): boolean {
     const escaped = escapeRegExp(label);
     return issue.labels.includes(label)
@@ -417,9 +441,9 @@ export function originMatches(origin: string, repo: string): boolean {
     return !/^[a-z]+:\/\//i.test(url) && !/^[\w.-]+@/.test(url);
 }
 
-export function taskPrompt(issue: GitHubIssue, branch: string): string {
+export function taskPrompt(issue: GitHubIssue, branch: string, label = "justai"): string {
     return [
-        issue.title,
+        cleanTitle(issue.title, label),
         "",
         issue.body.trim() || "(no description)",
         "",
