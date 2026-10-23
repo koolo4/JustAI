@@ -265,6 +265,11 @@ export class GitHubTaskRunner {
 
     private async checkoutBranch(branch: string, base: string, existing: boolean): Promise<void> {
         await this.git(["fetch", "origin"], true);
+
+        if (!(await this.git(["ls-remote", "--heads", "origin", base], true)).trim()) {
+            throw new Error(`The repository has no commits on '${base}' yet. Add a first commit (for example, "Add a README" on the repository page on GitHub), then the task will run.`);
+        }
+
         const remoteBranch = existing && (await this.git(["ls-remote", "--heads", "origin", branch], true)).trim() !== "";
 
         await this.git(["checkout", "-B", branch, remoteBranch ? `origin/${branch}` : `origin/${base}`]);
