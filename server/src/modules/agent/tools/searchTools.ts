@@ -112,6 +112,12 @@ export function createSearchTools(files: AgentFileSystem): Tool[] {
     return [glob, grep];
 }
 
+/** Все файлы проекта (пути через «/» от корня) с учётом .gitignore и постоянных исключений. */
+export async function listProjectFiles(root: string, signal: AbortSignal): Promise<string[]> {
+    const output = await ripgrep(["--files", "--hidden", "--no-require-git", "--path-separator", "/", ...excludes()], root, signal);
+    return output.split("\n").filter(Boolean).map(stripDotSlash);
+}
+
 function excludes(): string[] {
     return ALWAYS_EXCLUDED.flatMap(pattern => ["--glob", pattern]);
 }

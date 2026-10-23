@@ -14,7 +14,7 @@ const BROWSER_READ_TOOLS = ["browser_open", "browser_text", "browser_console", "
 const BROWSER_TOOLS = [...BROWSER_READ_TOOLS, "browser_click", "browser_type"];
 
 const CODE_TOOLS = [
-    "todo_write", "read_file", "list_dir", "glob", "grep", "edit_file", "write_file",
+    "todo_write", "read_file", "list_dir", "glob", "grep", "search_code", "edit_file", "write_file",
     "run_command", "read_output", "kill_process", "list_processes",
     "git_status", "git_diff", "git_log", "git_commit", "web_fetch",
     ...BROWSER_TOOLS,
@@ -38,7 +38,7 @@ const PROFILES: AgentProfile[] = [
         id: "planner",
         label: "Planner + local executor",
         description: "A strong model plans, writes exact changes and reviews; a local model (Ollama) runs commands and multi-step work.",
-        tools: ["todo_write", "read_file", "list_dir", "glob", "grep", "write_file", "edit_file", "git_status", "git_diff", "git_log", "web_fetch", ...BROWSER_READ_TOOLS, "spawn_agent", "delegate_task"],
+        tools: ["todo_write", "read_file", "list_dir", "glob", "grep", "search_code", "write_file", "edit_file", "git_status", "git_diff", "git_log", "web_fetch", ...BROWSER_READ_TOOLS, "spawn_agent", "delegate_task"],
         instructions: [
             "You are the planner in a two-agent setup. You cannot run commands yourself:",
             "a local executor model does that when you call delegate_task. You read code, plan, write exact content, delegate and review.",
@@ -61,7 +61,7 @@ const PROFILES: AgentProfile[] = [
         id: "docs",
         label: "Docs Writer",
         description: "Updates README, CHANGELOG and docs to match the code changes.",
-        tools: ["todo_write", "read_file", "list_dir", "glob", "grep", "edit_file", "write_file", "git_status", "git_diff", "git_log", "spawn_agent"],
+        tools: ["todo_write", "read_file", "list_dir", "glob", "grep", "search_code", "edit_file", "write_file", "git_status", "git_diff", "git_log", "spawn_agent"],
         instructions: [
             "You keep the project's documentation in sync with the code.",
             "Start from what changed: git_status, git_diff (and git_log for recent commits). Read the code you describe; never document behaviour you have not seen.",
@@ -95,7 +95,7 @@ const PROFILES: AgentProfile[] = [
         label: "Explorer",
         description: "Read-only helper that investigates the codebase and answers one question.",
         hidden: true,
-        tools: ["read_file", "list_dir", "glob", "grep", "git_status", "git_log"],
+        tools: ["read_file", "list_dir", "glob", "grep", "search_code", "git_status", "git_log"],
         instructions: [
             "You are a read-only research helper. Another agent asked you one question about this codebase.",
             "Search and read as much as needed, but never guess: base every statement on files you actually read.",
@@ -108,7 +108,7 @@ const PROFILES: AgentProfile[] = [
         label: "Reviewer",
         description: "Read-only helper that reviews the current uncommitted changes.",
         hidden: true,
-        tools: ["read_file", "list_dir", "glob", "grep", "git_status", "git_diff", "git_log"],
+        tools: ["read_file", "list_dir", "glob", "grep", "search_code", "git_status", "git_diff", "git_log"],
         instructions: [
             "You are a code reviewer. Review the current changes (use git_diff and read the surrounding code).",
             "Report only real problems: bugs, broken edge cases, security issues, missing updates in related code, failing assumptions.",

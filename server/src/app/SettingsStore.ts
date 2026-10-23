@@ -43,6 +43,8 @@ export function settingFields(): FieldSpec[] {
     }
 
     fields.push(
+        { key: "JUSTAI_EMBED_PROVIDER", label: "Embeddings provider (search_code)", group: "Code search", kind: "provider" },
+        { key: "JUSTAI_EMBED_MODEL", label: "Embeddings model", group: "Code search", kind: "text", placeholder: "nomic-embed-text" },
         { key: "JUSTAI_RESERVE_COOLDOWN_SEC", label: "Return to the main provider after (seconds)", group: "Reserves", kind: "number", placeholder: "120" },
         { key: "JUSTAI_PROXY", label: "HTTP proxy for cloud providers", group: "Network", kind: "text", placeholder: "http://127.0.0.1:10809" },
         { key: "JUSTAI_NO_PROXY", label: "Hosts without proxy (comma separated)", group: "Network", kind: "text" },

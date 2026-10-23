@@ -43,6 +43,9 @@ import { SessionStore } from "../modules/agent/runtime/SessionStore.js";
 import { AgentFileSystem } from "../modules/agent/tools/AgentFileSystem.js";
 import { createFileTools } from "../modules/agent/tools/fileTools.js";
 import { createSearchTools } from "../modules/agent/tools/searchTools.js";
+import { createCodeSearchTool } from "../modules/agent/tools/codeSearchTool.js";
+import { CodeIndex } from "../modules/agent/index/CodeIndex.js";
+import { OpenAIEmbedder } from "../modules/agent/index/OpenAIEmbedder.js";
 import { createShellTools } from "../modules/agent/tools/shellTools.js";
 import { ProcessManager } from "../infrastructure/process/ProcessManager.js";
 import { PermissionService } from "../modules/agent/permissions/PermissionService.js";
@@ -92,6 +95,8 @@ export class Container {
     public readonly microsoftGraph: MicrosoftGraphService;
     public readonly integrationsController:
         IntegrationsController;
+
+    private codeIndex?: CodeIndex;
 
     private readonly configService: ConfigService;
     private readonly logger: ILogger;
@@ -249,6 +254,11 @@ export class Container {
         for (const tool of [
             ...createFileTools(agentFiles, shouldIgnore),
             ...createSearchTools(agentFiles),
+            // Индекс создаётся при первом поиске: без вызова search_code эмбеддинги не нужны.
+            createCodeSearchTool(() => {
+                this.codeIndex ??= new CodeIndex(this.workspaceRoot, new OpenAIEmbedder());
+                return this.codeIndex;
+            }),
             ...createShellTools(agentFiles, this.processManager),
             ...createGitTools(this.gitService, this.workspaceRoot),
             createTodoTool(),
