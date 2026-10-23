@@ -97,8 +97,14 @@ export class GitHubClient {
         return items.map(item => ({ id: item.id, author: item.user?.login ?? "", body: item.body ?? "", createdAt: item.created_at }));
     }
 
-    public async comment(number: number, body: string, asBot = true): Promise<void> {
-        await this.request(`${this.base}/issues/${number}/comments`, { method: "POST", body: { body: asBot ? `${body}\n\n${BOT_MARKER}` : body } });
+    /** Комментарий к issue; возвращает его id (чтобы потом обновлять, например отчёт о ходе работы). */
+    public async comment(number: number, body: string, asBot = true): Promise<number> {
+        const created = await this.request<{ id: number } | undefined>(`${this.base}/issues/${number}/comments`, { method: "POST", body: { body: asBot ? `${body}\n\n${BOT_MARKER}` : body } });
+        return created?.id ?? 0;
+    }
+
+    public async updateComment(id: number, body: string): Promise<void> {
+        await this.request(`${this.base}/issues/comments/${id}`, { method: "PATCH", body: { body: `${body}\n\n${BOT_MARKER}` } });
     }
 
     public async addLabels(number: number, labels: string[]): Promise<void> {

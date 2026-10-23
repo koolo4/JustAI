@@ -1,7 +1,7 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 
-import type { Message } from "@justai/shared";
+import type { Message, ToolResultBlock } from "@justai/shared";
 
 import type { GitService } from "../../infrastructure/git/GitService.js";
 import type { PermissionService } from "../agent/permissions/PermissionService.js";
@@ -12,6 +12,7 @@ export const LABELS = {
     working: "justai:working",
     review: "justai:review",
     failed: "justai:failed",
+    paused: "justai:paused",
 } as const;
 
 export interface GitHubRunnerConfig {
@@ -28,6 +29,8 @@ export interface GitHubRunnerConfig {
     allowPublic: boolean;
     /** Токен для git push по https://github.com (через переменные окружения, не в адресе и не в конфиге). */
     token: string;
+    /** Как часто обновлять отчёт о ходе работы и проверять команду остановки (мс, по умолчанию 30 с). */
+    progressMs?: number;
 }
 
 export interface GitHubRunnerStatus {
@@ -47,7 +50,7 @@ export interface GitHubRunnerStatus {
 interface TaskState {
     sessionId: string;
     branch: string;
-    status: "working" | "review" | "failed";
+    status: "working" | "review" | "failed" | "paused";
     /** Последний учтённый комментарий: новые после него — правки. */
     lastCommentId: number;
     pullRequest?: string;
@@ -60,6 +63,8 @@ interface StoredState {
 }
 
 const REPORT_CHARS = 3_000;
+
+const CONTINUE_NOTE = "Continue the task from where you stopped and finish it.";
 
 const RESUME_NOTE = "The previous run of this task was interrupted (JustAI was restarted). Check the current state of the files and continue from where you stopped until the task, including any requested changes above, is complete.";
 
@@ -175,10 +180,17 @@ export class GitHubTaskRunner {
             state.followUps = [...state.followUps ?? [], issue.number];
             await this.save(state);
 
+            // «/justai stop #N», когда задача не выполняется, — останавливать нечего.
+            if (followUpCommand(issue, config.label)?.action === "stop") {
+                await this.soft(client.comment(issue.number, `Задача #${target} сейчас не выполняется — останавливать нечего.`), "comments");
+                await this.soft(client.closeIssue(issue.number), "closing issues");
+                continue;
+            }
+
             await this.soft(client.comment(issue.number, `Принято как правка к задаче #${target}. Отчёт будет в #${target}.`), "comments");
             await this.soft(client.closeIssue(issue.number), "closing issues");
 
-            const body = stripCommands(issue.body, config.label) || issue.title;
+            const body = stripCommands(issue.body, config.label) || CONTINUE_NOTE;
             await this.run(await client.getIssue(target), state, [{ id: 0, author: issue.author, body, createdAt: "" }]);
             return;
         }
@@ -204,7 +216,8 @@ export class GitHubTaskRunner {
 
             const comments = await client.listComments(issue.number);
             const feedback = comments.filter(item =>
-                item.id > task.lastCommentId && allowed.has(item.author.toLowerCase()) && !item.body.includes(BOT_MARKER));
+                item.id > task.lastCommentId && allowed.has(item.author.toLowerCase()) && !item.body.includes(BOT_MARKER)
+                && !isStopCommand(item.body, config.label));
 
             if (feedback.length > 0) {
                 await this.run(issue, state, feedback, comments);
@@ -240,6 +253,7 @@ export class GitHubTaskRunner {
         await this.soft(client.addLabels(issue.number, [LABELS.working]), "labels");
         await this.soft(client.removeLabel(issue.number, LABELS.review), "labels");
         await this.soft(client.removeLabel(issue.number, LABELS.failed), "labels");
+        await this.soft(client.removeLabel(issue.number, LABELS.paused), "labels");
 
         const task: TaskState = {
             sessionId: previous?.sessionId ?? "",
@@ -275,12 +289,17 @@ export class GitHubTaskRunner {
             this.status = { ...this.status, currentSessionId: task.sessionId };
 
             permissions.setUnattended(task.sessionId, true);
+            const startIndex = (await sessions.get(task.sessionId)).messages.length;
             await sessions.send(task.sessionId, { text: feedback.length ? feedbackPrompt(issue, feedback, branch) : taskPrompt(issue, branch, config.label) });
+
+            // Пока агент работает: живой отчёт в issue и проверка команды «/justai stop».
+            const watch = await this.watch(issue, task, startIndex, state);
             await sessions.waitForIdle(task.sessionId);
+            await watch.finish();
 
             const details = await sessions.get(task.sessionId);
-            const report = lastAssistantText(details.messages) || "(no report)";
-            const committed = await this.commit(issue);
+            const report = lastAssistantText(details.messages.slice(startIndex)) || "(no report)";
+            const committed = await this.commit(issue, watch.stopped ? "WIP: " : "");
 
             if (committed) {
                 await this.push(branch);
@@ -289,8 +308,27 @@ export class GitHubTaskRunner {
                 task.pullRequest = pull.url;
             }
 
+            if (watch.stopped) {
+                task.status = "paused";
+                task.lastCommentId = Math.max(task.lastCommentId, watch.stopCommentId);
+
+                await watch.update("⏸ **JustAI** остановлен по команде.");
+                await this.soft(client.comment(issue.number, [
+                    "⏸ **JustAI** stopped on request.",
+                    committed ? `Work so far is saved in \`${branch}\`${task.pullRequest ? ` · pull request: ${task.pullRequest}` : ""}.` : "No file changes yet.",
+                    "",
+                    "**Where it stopped:**",
+                    clip(report, REPORT_CHARS),
+                    "",
+                    "_To continue, reply in this issue with instructions (or create an issue with `/justai continue #" + issue.number + "`). JustAI resumes in the same session._",
+                ].join("\n")), "comments");
+                await this.soft(client.addLabels(issue.number, [LABELS.paused]), "labels");
+                return;
+            }
+
             const ok = details.session.status === "completed" && (committed || Boolean(task.pullRequest));
             task.status = ok ? "review" : "failed";
+            await watch.update(ok ? "✅ **JustAI** закончил — отчёт ниже." : "⚠️ **JustAI** не смог закончить — подробности ниже.");
 
             await this.soft(client.comment(issue.number, [
                 ok ? "✅ **JustAI** finished this step." : "⚠️ **JustAI** could not complete this step.",
@@ -318,6 +356,85 @@ export class GitHubTaskRunner {
             await this.save(state);
             this.status = { ...this.status, currentIssue: undefined, currentSessionId: undefined, ...(this.status.state === "working" ? { state: "idle" as const } : {}) };
         }
+    }
+
+    /**
+     * Наблюдение за работающим агентом: отчёт о ходе работы (один комментарий, обновляется) и команда остановки —
+     * комментарий «/justai stop» в задаче или issue «/justai stop #N».
+     */
+    private async watch(issue: GitHubIssue, task: TaskState, startIndex: number, state: StoredState): Promise<{
+        readonly stopped: boolean;
+        readonly stopCommentId: number;
+        update(header: string): Promise<void>;
+        finish(): Promise<void>;
+    }> {
+        const { client, sessions, config } = this.deps;
+        const allowed = await this.allowedUsers();
+        let progressId = 0;
+        let stopped = false;
+        let stopCommentId = 0;
+        let busy: Promise<void> | undefined;
+
+        const render = async (header: string, active = true): Promise<string> => {
+            const details = await sessions.get(task.sessionId);
+            return progressReport(header, details.messages.slice(startIndex), task.branch, issue.number, config.label, active);
+        };
+
+        const update = async (header: string, active = false) => {
+            if (!progressId) return;
+            await this.soft(render(header, active).then(body => client.updateComment(progressId, body)), "comments");
+        };
+
+        try {
+            progressId = await client.comment(issue.number, await render("⏳ **JustAI** работает над задачей…"));
+        }
+        catch (error) {
+            await this.soft(Promise.reject(error), "comments");
+        }
+
+        const checkStop = async () => {
+            const comments = await client.listComments(issue.number).catch(() => [] as GitHubComment[]);
+            const command = comments.find(item =>
+                item.id > task.lastCommentId && allowed.has(item.author.toLowerCase()) && isStopCommand(item.body, config.label));
+            const issues = command ? [] : await client.listIssues().catch(() => [] as GitHubIssue[]);
+            const stopIssue = issues.find(item =>
+                !item.isPullRequest && allowed.has(item.author.toLowerCase()) && !state.followUps?.includes(item.number)
+                && followUpCommand(item, config.label)?.action === "stop" && followUpTarget(item, config.label) === issue.number);
+
+            if (!command && !stopIssue) return;
+
+            stopped = true;
+            stopCommentId = command?.id ?? 0;
+
+            if (stopIssue) {
+                state.followUps = [...state.followUps ?? [], stopIssue.number];
+                await this.soft(client.comment(stopIssue.number, `Задача #${issue.number} остановлена.`), "comments");
+                await this.soft(client.closeIssue(stopIssue.number), "closing issues");
+            }
+
+            this.deps.log?.(`[github] issue #${issue.number}: stop requested`);
+            await sessions.stop(task.sessionId);
+        };
+
+        const tick = () => {
+            busy ??= (async () => {
+                if (!stopped) await checkStop();
+                if (!stopped) await update("⏳ **JustAI** работает над задачей…", true);
+            })().catch(() => undefined).finally(() => { busy = undefined; });
+        };
+
+        const timer = setInterval(tick, config.progressMs ?? 30_000);
+        timer.unref();
+
+        return {
+            get stopped() { return stopped; },
+            get stopCommentId() { return stopCommentId; },
+            update,
+            finish: async () => {
+                clearInterval(timer);
+                await busy;
+            },
+        };
     }
 
     /**
@@ -359,7 +476,7 @@ export class GitHubTaskRunner {
     }
 
     /** Закоммитить всё, что сделал агент. false — изменений нет. */
-    private async commit(issue: GitHubIssue): Promise<boolean> {
+    private async commit(issue: GitHubIssue, prefix = ""): Promise<boolean> {
         // .justai (сессии, токен, состояние моста) не коммитится никогда, даже если у проекта нет своего .gitignore.
         await this.git(["add", "-A", "--", ".", ":(exclude).justai"]);
 
@@ -371,7 +488,7 @@ export class GitHubTaskRunner {
             ? []
             : ["-c", "user.name=JustAI", "-c", "user.email=justai@users.noreply.github.com"];
 
-        await this.git([...identity, "commit", "-m", `JustAI: ${cleanTitle(issue.title, this.deps.config.label)} (#${issue.number})`]);
+        await this.git([...identity, "commit", "-m", `JustAI: ${prefix}${cleanTitle(issue.title, this.deps.config.label)} (#${issue.number})`]);
         return true;
     }
 
@@ -433,10 +550,27 @@ export function isTask(issue: GitHubIssue, label: string): boolean {
         || new RegExp(`^\\s*/${escaped}\\s*$`, "im").test(issue.body);
 }
 
-/** Номер задачи, к которой этот issue — правка («/justai #3» отдельной строкой), иначе null. */
+/**
+ * Служебный issue для задачи N: «/justai #3», «/justai continue #3» (правка или продолжение), «/justai stop #3» (остановить).
+ */
+export function followUpCommand(issue: GitHubIssue, label: string): { target: number; action: "stop" | "continue" } | null {
+    const match = new RegExp(`^\\s*/${escapeRegExp(label)}\\s+(?:(stop|pause|continue)\\s+)?#(\\d+)\\s*$`, "im").exec(issue.body);
+
+    if (!match) {
+        return null;
+    }
+
+    return { target: Number(match[2]), action: match[1] === "stop" || match[1] === "pause" ? "stop" : "continue" };
+}
+
+/** Номер задачи, к которой этот issue — правка или команда, иначе null. */
 export function followUpTarget(issue: GitHubIssue, label: string): number | null {
-    const match = new RegExp(`^\\s*/${escapeRegExp(label)}\\s+#(\\d+)\\s*$`, "im").exec(issue.body);
-    return match ? Number(match[1]) : null;
+    return followUpCommand(issue, label)?.target ?? null;
+}
+
+/** Комментарий-команда «/justai stop» (или pause) отдельной строкой. */
+export function isStopCommand(body: string, label: string): boolean {
+    return new RegExp(`^\\s*/${escapeRegExp(label)}\\s+(stop|pause)\\s*$`, "im").test(body);
 }
 
 /** Текст правки без служебных строк «/justai …». */
@@ -479,6 +613,98 @@ export function taskPrompt(issue: GitHubIssue, branch: string, label = "justai")
         "Do not commit or push: JustAI commits your changes and opens a pull request after you finish.",
         "Finish with a short report: what you changed (files), how you verified it, and anything left to do.",
     ].join("\n");
+}
+
+const PROGRESS_ACTIONS = 8;
+
+/**
+ * Отчёт о ходе работы для issue: шаги, план агента, последние действия (с ошибками) и повторяющиеся сбои —
+ * чтобы планировщик или человек видели, идёт ли работа, и могли вовремя остановить её.
+ */
+export function progressReport(header: string, messages: Message[], branch: string, issue: number, label: string, active = true): string {
+    const results = new Map<string, ToolResultBlock>();
+
+    for (const message of messages) {
+        for (const block of message.content) {
+            if (block.type === "tool_result") results.set(block.toolUseId, block);
+        }
+    }
+
+    const actions: string[] = [];
+    let plan: Array<{ content?: unknown; status?: unknown }> | undefined;
+    let steps = 0;
+    let lastFailure = "";
+    let failureStreak = 0;
+    let failureTool = "";
+
+    for (const message of messages) {
+        for (const block of message.content) {
+            if (block.type !== "tool_use") continue;
+
+            steps += 1;
+
+            if (block.name === "todo_write") {
+                const todos = (block.input as { todos?: unknown } | null)?.todos;
+                if (Array.isArray(todos)) plan = todos as typeof plan;
+                continue;
+            }
+
+            const result = results.get(block.id);
+            const error = result?.isError ? firstLineOf(resultText(result)) : "";
+            actions.push(`${!result ? "…" : result.isError ? "✕" : "✓"} \`${block.name}\` ${briefInput(block.input)}${error ? ` — ${error}` : ""}`);
+
+            const key = `${block.name}:${JSON.stringify(block.input)}`;
+
+            if (result?.isError) {
+                failureStreak = key === lastFailure ? failureStreak + 1 : 1;
+                lastFailure = key;
+                failureTool = block.name;
+            }
+            else if (result) {
+                failureStreak = 0;
+                lastFailure = "";
+            }
+        }
+    }
+
+    const time = new Date().toISOString().slice(11, 16);
+    const lines = [header, `Шагов: ${steps} · ветка \`${branch}\` · обновлено ${time} UTC`];
+
+    if (plan?.length) {
+        lines.push("", "**План:**", ...plan.map(todo => `- [${todo.status === "completed" ? "x" : " "}] ${String(todo.content)}${todo.status === "in_progress" ? " ← сейчас" : ""}`));
+    }
+
+    if (actions.length) {
+        lines.push("", "**Последние действия:**", ...actions.slice(-PROGRESS_ACTIONS));
+    }
+
+    if (failureStreak >= 2) {
+        lines.push("", `⚠ Одна и та же ошибка \`${failureTool}\` повторяется ${failureStreak} раза подряд — возможно, агент застрял.`);
+    }
+
+    if (active) lines.push("", `_Остановить: комментарий \`/${label} stop\` (или issue со строкой \`/${label} stop #${issue}\`). Продолжить потом — комментарий с указаниями._`);
+    return lines.join("\n");
+}
+
+function resultText(block: ToolResultBlock): string {
+    return typeof block.content === "string"
+        ? block.content
+        : block.content.map(part => part.type === "text" ? part.text : "[image]").join(" ");
+}
+
+function firstLineOf(text: string): string {
+    const line = text.trim().split("\n").find(item => item.trim()) ?? "";
+    return line.length > 140 ? `${line.slice(0, 139)}…` : line;
+}
+
+function briefInput(input: unknown): string {
+    const value = input as { path?: unknown; command?: unknown; pattern?: unknown; query?: unknown; task?: unknown } | null;
+    const main = value?.path ?? value?.command ?? value?.pattern ?? value?.query ?? value?.task;
+
+    if (typeof main !== "string") return "";
+
+    const single = main.replace(/\s+/g, " ").trim();
+    return single.length > 80 ? `${single.slice(0, 79)}…` : single;
 }
 
 export function feedbackPrompt(issue: GitHubIssue, feedback: GitHubComment[], branch: string): string {

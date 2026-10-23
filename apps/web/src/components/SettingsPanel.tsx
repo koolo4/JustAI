@@ -149,7 +149,7 @@ interface GitHubInfo {
         lastCheck?: string;
         lastError?: string;
         warning?: string;
-        tasks: Array<{ issue: number; status: "working" | "review" | "failed"; branch: string; pullRequest?: string }>;
+        tasks: Array<{ issue: number; status: "working" | "review" | "failed" | "paused"; branch: string; pullRequest?: string }>;
     };
 }
 
@@ -160,7 +160,7 @@ const RUNNER_STATE: Record<NonNullable<GitHubInfo["runner"]>["state"], string> =
     stopped: "остановлен",
 };
 
-const TASK_STATE = { working: "в работе", review: "готов PR", failed: "не удалось" } as const;
+const TASK_STATE = { working: "в работе", review: "готов PR", failed: "не удалось", paused: "на паузе" } as const;
 
 /** Мост GitHub: что настроено, что делает исполнитель задач. Настраивается полями раздела GitHub ниже. */
 function GitHubStatus() {
