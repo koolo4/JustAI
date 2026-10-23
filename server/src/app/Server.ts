@@ -173,6 +173,61 @@ export class Server {
 
         }
 
+        // Терминалы пользователя: вывод приходит событиями terminal.output по WebSocket.
+        const terminals =
+            this.container.terminals;
+
+        const size = (body: unknown) => {
+            const value = body as { cols?: unknown; rows?: unknown } | undefined;
+            return { cols: Number(value?.cols) || 80, rows: Number(value?.rows) || 24 };
+        };
+
+        const terminalId = (req: express.Request) => String(req.params.id ?? '');
+
+        this.app.get('/api/terminals', (_req, res) => {
+            res.json({ terminals: terminals.list() });
+        });
+
+        this.app.post('/api/terminals', (req, res, next) => {
+            const { cols, rows } = size(req.body);
+
+            terminals.create(cols, rows)
+                .then(info => res.status(201).json(info))
+                .catch(next);
+        });
+
+        this.app.post('/api/terminals/:id/input', (req, res, next) => {
+            try {
+                const data = (req.body as { data?: unknown } | undefined)?.data;
+
+                if (typeof data !== 'string' || data.length > 100_000) {
+                    throw new BadRequestError('Pass the typed text as "data" (at most 100 000 characters).');
+                }
+
+                terminals.write(terminalId(req), data);
+                res.status(204).end();
+            }
+            catch (error) {
+                next(error);
+            }
+        });
+
+        this.app.post('/api/terminals/:id/resize', (req, res, next) => {
+            try {
+                const { cols, rows } = size(req.body);
+                terminals.resize(terminalId(req), cols, rows);
+                res.status(204).end();
+            }
+            catch (error) {
+                next(error);
+            }
+        });
+
+        this.app.delete('/api/terminals/:id', (req, res) => {
+            terminals.close(terminalId(req));
+            res.status(204).end();
+        });
+
         // Подключённые MCP-серверы и их инструменты.
         this.app.get(
             '/api/agent/mcp',

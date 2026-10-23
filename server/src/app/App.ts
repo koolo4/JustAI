@@ -49,6 +49,8 @@ export class App {
         for (const signal of ['SIGINT', 'SIGTERM'] as const) {
 
             process.once(signal, () => {
+                // Зависшая остановка (браузер, MCP-сервер) не должна держать процесс: tsx watch ждёт его выхода.
+                setTimeout(() => process.exit(0), 3_000).unref();
                 void this.container.dispose().finally(() => process.exit(0));
             });
 

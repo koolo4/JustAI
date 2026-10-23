@@ -53,10 +53,62 @@ button {
     margin-left: 16px;
 }
 
+.topbar-terminal { margin-left: 8px; }
+
 .topbar-settings {
     margin-right: auto;
     margin-left: 8px;
 }
+
+.center-main {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.terminal-panel {
+    display: flex;
+    flex: none;
+    flex-direction: column;
+    height: 38%;
+    min-height: 160px;
+    border-top: 1px solid #242a32;
+    background: #0c0f12;
+}
+
+.terminal-tabs {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    padding: 4px 8px;
+    font-size: 12px;
+    border-bottom: 1px solid #1c2229;
+}
+
+.terminal-tab {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    padding: 3px 8px;
+    color: #9fb0c2;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.terminal-tab.active { color: #fff; background: #1a2028; }
+.terminal-tab.exited { opacity: .6; }
+
+.terminal-hide { margin-left: auto; }
+
+.terminal-views {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    padding: 4px 0 0 8px;
+}
+
+.terminal-view { height: 100%; }
 
 .settings-panel {
     display: flex;

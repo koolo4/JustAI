@@ -49,6 +49,7 @@ import { OpenAIEmbedder } from "../modules/agent/index/OpenAIEmbedder.js";
 import { DiagnosticsService } from "../modules/agent/diagnostics/Diagnostics.js";
 import { createDiagnosticsTool } from "../modules/agent/tools/diagnosticsTool.js";
 import { mcpConfigFiles, McpManager } from "../modules/agent/mcp/McpManager.js";
+import { TerminalService } from "../infrastructure/terminal/TerminalService.js";
 import { createShellTools } from "../modules/agent/tools/shellTools.js";
 import { ProcessManager } from "../infrastructure/process/ProcessManager.js";
 import { PermissionService } from "../modules/agent/permissions/PermissionService.js";
@@ -104,6 +105,8 @@ export class Container {
     public readonly diagnostics: DiagnosticsService;
 
     public readonly mcp: McpManager;
+
+    public readonly terminals: TerminalService;
 
     private readonly configService: ConfigService;
     private readonly logger: ILogger;
@@ -247,6 +250,12 @@ export class Container {
                 process.env.JUSTAI_BROWSER_CHANNEL
                     ? { channel: process.env.JUSTAI_BROWSER_CHANNEL }
                     : {},
+            );
+
+        this.terminals =
+            new TerminalService(
+                this.workspaceRoot,
+                event => this.webSocketConnectionManager.broadcast(event),
             );
 
         this.mcp =
@@ -403,6 +412,7 @@ export class Container {
     /** Остановить всё, что держит папку проекта: процессы агента, браузер, сессии. */
     public async dispose(): Promise<void> {
         await this.sessionManager.stopAll();
+        this.terminals.closeAll();
 
         await Promise.allSettled([
             this.processManager.killAll(),

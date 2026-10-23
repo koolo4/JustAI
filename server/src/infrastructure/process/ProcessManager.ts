@@ -6,7 +6,11 @@ import { StringDecoder } from "node:string_decoder";
 const MAX_BUFFER_CHARS = 2_000_000;
 
 /** Переменные окружения, которые не передаются командам агента. */
-const SECRET_ENV = /^(ANTHROPIC_|OPENAI_|JUSTAI_TOKEN$|JUSTAI_ENCRYPTION_KEY$|MICROSOFT_CLIENT_SECRET$)/i;
+/**
+ * Секреты не передаются дочерним процессам: всё у Anthropic/OpenAI, любые *_API_KEY, *_TOKEN, *_SECRET, *_PASSWORD
+ * (GROQ_API_KEY, RESERVE1_API_KEY, GITHUB_TOKEN…) и служебные ключи JustAI.
+ */
+const SECRET_ENV = /^(ANTHROPIC_|OPENAI_)|(_API_KEY|_TOKEN|_SECRET|_PASSWORD|_KEY)$|^(JUSTAI_TOKEN|JUSTAI_ENCRYPTION_KEY|MICROSOFT_CLIENT_SECRET)$/i;
 
 export type ProcessStatus = "running" | "exited" | "killed" | "timed_out";
 
@@ -300,14 +304,21 @@ export class ProcessManager {
     }
 }
 
-function commandEnv(): NodeJS.ProcessEnv {
+/** Окружение сервера без ключей и токенов: дочерним процессам (команды агента, терминал) они не передаются. */
+export function safeChildEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = {};
 
-    for (const [key, value] of Object.entries(process.env)) {
+    for (const [key, value] of Object.entries(source)) {
         if (!SECRET_ENV.test(key)) {
             env[key] = value;
         }
     }
+
+    return env;
+}
+
+function commandEnv(): NodeJS.ProcessEnv {
+    const env = safeChildEnv();
 
     // Неинтерактивный режим для инструментов (vitest run, без цвета и спиннеров).
     env.CI = "1";

@@ -4,9 +4,10 @@
     {
       "name": "server",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "server", "run", "dev"],
+      "runtimeArgs": ["--prefix", "server", "run", "start:once"],
       "port": 4302,
-      "url": "http://localhost:4302"
+      "url": "http://localhost:4302",
+      "autoPort": false
     },
     {
       "name": "web",

@@ -24,6 +24,11 @@
 | POST | `/api/agent/sessions/:id/revert` | Тело `{ paths? }` (без него — все файлы). `{ files }` — откат к снапшоту; `409`, если агент работает или нет git |
 | GET | `/api/settings` | `{ fields }` — настраиваемые переменные; ключи только маской `••••abcd` |
 | PUT | `/api/settings` | Тело `{ values: { NAME: "value" \| null } }` (`null` — вернуть значение из `server/.env`). `202`, затем сервер пересобирается с новыми настройками; `400` — неизвестная переменная или неверное значение; `409` — агент работает |
+| GET | `/api/terminals` | `{ terminals: [{ id, title, alive, buffer }] }` — открытые терминалы с хвостом вывода |
+| POST | `/api/terminals` | Тело `{ cols, rows }` → `201 { id, title, alive }`; вывод — события `terminal.output { terminalId, data }` и `terminal.exit` по WebSocket |
+| POST | `/api/terminals/:id/input` | Тело `{ data }` — ввод с клавиатуры; `204` |
+| POST | `/api/terminals/:id/resize` | Тело `{ cols, rows }`; `204` |
+| DELETE | `/api/terminals/:id` | Закрыть терминал; `204` |
 | GET | `/api/agent/mcp` | `{ configFiles, servers: [{ name, status, tools, error? }] }` — подключённые MCP-серверы |
 | GET | `/api/workspace/diagnostics` | `{ checks, diagnostics, unparsed }` — запуск typecheck/lint проекта и разобранные ошибки `{ path, line, column, severity, code?, message }` |
 | GET | `/api/workspace/info` | `{ root, name, recent, switchable }` — текущая папка проекта и недавние |

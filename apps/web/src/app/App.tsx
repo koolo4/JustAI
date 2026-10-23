@@ -5,6 +5,7 @@ import { DiffReview } from "../components/diff/DiffReview";
 import { FileTree } from "../components/FileTree";
 import { PanelBoundary } from "../components/PanelBoundary";
 import { SettingsPanel } from "../components/SettingsPanel";
+import { TerminalPanel } from "../components/terminal/TerminalPanel";
 import { WorkspacePicker } from "../components/WorkspacePicker";
 import { useIDEContext } from "../context/useIDEContext";
 import { CodeEditor } from "../editor/CodeEditor";
@@ -25,6 +26,7 @@ export function App() {
     const [tree, setTree] = useState<WorkspaceNode[]>([]);
     const [review, setReview] = useState<ReviewRequest | null>(null);
     const [settingsOpen, setSettingsOpen] = useState(false);
+    const [terminalOpen, setTerminalOpen] = useState(false);
     const editor = useEditorTabs();
 
     function refreshTree() {
@@ -88,6 +90,9 @@ export function App() {
             <header className="topbar">
                 <h1>JustAI</h1>
                 <WorkspacePicker />
+                <button className="secondary-button topbar-terminal" onClick={() => setTerminalOpen(open => !open)}>
+                    ⌨ Terminal
+                </button>
                 <button className="secondary-button topbar-settings" onClick={() => setSettingsOpen(open => !open)}>
                     ⚙ Settings
                 </button>
@@ -104,6 +109,7 @@ export function App() {
                 </aside>
 
                 <section className="panel center">
+                    <div className="center-main">
                     <PanelBoundary name="Editor">
                     {settingsOpen ? (
                         <SettingsPanel onClose={() => setSettingsOpen(false)} />
@@ -132,6 +138,13 @@ export function App() {
                     />
                     )}
                     </PanelBoundary>
+                    </div>
+
+                    {terminalOpen && (
+                        <PanelBoundary name="Terminal">
+                            <TerminalPanel onClose={() => setTerminalOpen(false)} />
+                        </PanelBoundary>
+                    )}
                 </section>
 
                 <aside className="panel right">
