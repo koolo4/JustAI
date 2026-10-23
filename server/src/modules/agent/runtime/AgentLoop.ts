@@ -103,6 +103,8 @@ export class AgentLoop {
 
     private nudgedToBuild = false;
 
+    private planNudges = 0;
+
     constructor(
         private readonly options: AgentLoopOptions,
     ) {
@@ -221,6 +223,22 @@ export class AgentLoop {
                     await add(createMessage("user", [{
                         type: "text",
                         text: "[JustAI] The user asked you to build this, not to describe it. Implement it now in the workspace: create the files with write_file (or delegate the steps), putting your ideas (modes, style, content) into the actual code. Then report briefly what you built.",
+                    }]));
+                    continue;
+                }
+
+                // Модель закончила, а в её собственном плане остались невыполненные пункты.
+                const unfinished = unfinishedTodos(messages);
+
+                if (unfinished.length > 0 && this.planNudges < MAX_PLAN_NUDGES) {
+                    this.planNudges += 1;
+                    await add(createMessage("user", [{
+                        type: "text",
+                        text: [
+                            "[JustAI] Your plan still has unfinished items:",
+                            ...unfinished.map(item => `- ${item}`),
+                            "Continue and complete them in the workspace (update the plan with todo_write as you go). If an item is no longer needed, mark it completed and say why.",
+                        ].join("\n"),
                     }]));
                     continue;
                 }
@@ -596,6 +614,35 @@ export function asksToBuild(text: string): boolean {
 
     return /(сдела|созда|напиши|написать|реализу|добав|нужен|нужна|нужно|сверста|собери|запили|build|make|create|implement|write|add)\w*/.test(lower)
         && /(сайт|страниц|игр|приложени|бот|скрипт|сервис|функци|компонент|файл|код|лендинг|site|page|game|app|script|bot|service|feature|component|file|code)/.test(lower);
+}
+
+/** Сколько раз за прогон напоминать о невыполненных пунктах плана. */
+const MAX_PLAN_NUDGES = 2;
+
+/**
+ * Невыполненные пункты последнего плана (todo_write) в текущем прогоне — после последнего сообщения пользователя.
+ * План из прошлых задач не учитывается.
+ */
+export function unfinishedTodos(messages: Message[]): string[] {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const message = messages[i]!;
+
+        if (message.role === "user" && message.content.some(block => block.type === "text" && !block.text.startsWith("[JustAI]"))) {
+            return [];
+        }
+
+        for (const block of [...message.content].reverse()) {
+            if (block.type !== "tool_use" || block.name !== "todo_write") continue;
+
+            const todos = (block.input as { todos?: Array<{ content?: unknown; status?: unknown }> } | null)?.todos;
+
+            return Array.isArray(todos)
+                ? todos.filter(todo => todo.status !== "completed").map(todo => String(todo.content))
+                : [];
+        }
+    }
+
+    return [];
 }
 
 /** Текст последнего сообщения пользователя (не результаты инструментов и не подсказки JustAI). */

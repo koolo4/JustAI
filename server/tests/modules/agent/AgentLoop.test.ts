@@ -172,6 +172,31 @@ describe("AgentLoop", () => {
         expect(again.provider.requests).toHaveLength(2);
     });
 
+    it("reminds the model of unfinished plan items before it finishes, at most twice", async () => {
+        const todo = defineTool({ name: "todo_write", description: "t", inputSchema: z.object({ todos: z.array(z.object({ content: z.string(), status: z.string() })) }), kind: "read", run: async () => "ok" });
+        const plan = (status: string) => ({ todos: [{ content: "index.html", status: "completed" }, { content: "script.js", status }] });
+
+        const { loop, saved, provider } = setup([
+            { toolCalls: [{ name: "todo_write", input: plan("pending") }] },
+            { text: "Here are some ideas instead." },
+            { toolCalls: [{ name: "todo_write", input: plan("completed") }] },
+            { text: "Done: index.html and script.js." },
+        ], { tools: [todo] });
+
+        expect((await loop.run([createMessage("user", [{ type: "text", text: "go" }])])).status).toBe("completed");
+        expect(provider.requests).toHaveLength(4);
+        expect(saved[3]!.content).toEqual([{ type: "text", text: expect.stringContaining("unfinished items:\n- script.js") }]);
+
+        const stubborn = setup([
+            { toolCalls: [{ name: "todo_write", input: plan("pending") }] },
+            { text: "ideas" },
+            { text: "ideas" },
+            { text: "ideas" },
+        ], { tools: [todo] });
+        await stubborn.loop.run([createMessage("user", [{ type: "text", text: "go" }])]);
+        expect(stubborn.provider.requests).toHaveLength(4);
+    });
+
     it("does not treat an empty reply as finished", async () => {
         const { loop, user, saved, provider } = setup([
             { text: "" },
