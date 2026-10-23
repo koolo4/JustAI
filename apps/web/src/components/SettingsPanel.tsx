@@ -116,6 +116,7 @@ export function SettingsPanel({ onClose }: Props) {
             {!settings && !error && <div className="muted settings-loading">Загрузка настроек…</div>}
 
             <div className="settings-body">
+                <GitHubStatus />
                 <McpStatus />
 
                 {groups.map(([group, fields]) => (
@@ -136,6 +137,92 @@ export function SettingsPanel({ onClose }: Props) {
                 ))}
             </div>
         </div>
+    );
+}
+
+interface GitHubInfo {
+    configured: boolean;
+    repo: string | null;
+    runner: null | {
+        state: "idle" | "working" | "error" | "stopped";
+        currentIssue?: number;
+        lastCheck?: string;
+        lastError?: string;
+        tasks: Array<{ issue: number; status: "working" | "review" | "failed"; branch: string; pullRequest?: string }>;
+    };
+}
+
+const RUNNER_STATE: Record<NonNullable<GitHubInfo["runner"]>["state"], string> = {
+    idle: "ждёт задачи",
+    working: "выполняет задачу",
+    error: "ошибка",
+    stopped: "остановлен",
+};
+
+const TASK_STATE = { working: "в работе", review: "готов PR", failed: "не удалось" } as const;
+
+/** Мост GitHub: что настроено, что делает исполнитель задач. Настраивается полями раздела GitHub ниже. */
+function GitHubStatus() {
+    const [info, setInfo] = useState<GitHubInfo | null>(null);
+
+    const load = () => {
+        apiFetch("/github/status")
+            .then(async response => response.ok ? setInfo(await response.json() as GitHubInfo) : undefined)
+            .catch(() => undefined);
+    };
+
+    useEffect(load, []);
+
+    if (!info) {
+        return null;
+    }
+
+    const runner = info.runner;
+
+    return (
+        <section className="settings-group">
+            <h3>Мост GitHub</h3>
+
+            {!info.configured && (
+                <p className="muted setting-hint">
+                    Задачи для этого ПК приходят из issues репозитория с меткой <code>justai</code>; результат — ветка и pull request.
+                    Укажите токен и репозиторий в разделе «GitHub» ниже и включите «Брать задачи из GitHub» (on) на ПК-исполнителе.
+                    На ПК с планировщиком выберите профиль «Architect».
+                </p>
+            )}
+
+            {info.configured && (
+                <div className="setting-row">
+                    <span className="setting-label">{info.repo}</span>
+                    <span className={runner?.state === "error" ? "error-text" : "muted"}>
+                        {runner ? RUNNER_STATE[runner.state] : "исполнитель выключен: этот ПК только ставит задачи"}
+                        {runner?.currentIssue ? ` · задача #${runner.currentIssue}` : ""}
+                        {runner?.lastError ? `: ${runner.lastError}` : ""}
+                    </span>
+                    <span className="setting-meta muted">
+                        {runner && (
+                            <button
+                                type="button"
+                                className="link-button"
+                                onClick={() => void apiFetch("/github/check", { method: "POST" }).then(() => setTimeout(load, 1500))}
+                            >
+                                проверить сейчас
+                            </button>
+                        )}
+                    </span>
+                </div>
+            )}
+
+            {runner?.tasks.map(task => (
+                <div key={task.issue} className="setting-row">
+                    <span className="setting-label">Задача #{task.issue}<code className="muted">{task.branch}</code></span>
+                    <span className={task.status === "failed" ? "error-text" : "muted"}>{TASK_STATE[task.status]}</span>
+                    <span className="setting-meta muted">
+                        {task.pullRequest && <a href={task.pullRequest} target="_blank" rel="noreferrer">PR</a>}
+                    </span>
+                </div>
+            ))}
+        </section>
     );
 }
 

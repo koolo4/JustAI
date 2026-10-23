@@ -181,6 +181,6 @@ describe("planner → executor delegation", () => {
     });
 
     it("hides the executor profile from the profile list", () => {
-        expect(new AgentProfiles().list().map(profile => profile.id)).toEqual(["coder", "planner", "docs", "general", "office"]);
+        expect(new AgentProfiles().list().map(profile => profile.id)).toEqual(["coder", "planner", "architect", "docs", "general", "office"]);
     });
 });

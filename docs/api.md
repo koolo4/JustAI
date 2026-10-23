@@ -30,6 +30,8 @@
 | POST | `/api/terminals/:id/input` | Тело `{ data }` — ввод с клавиатуры; `204` |
 | POST | `/api/terminals/:id/resize` | Тело `{ cols, rows }`; `204` |
 | DELETE | `/api/terminals/:id` | Закрыть терминал; `204` |
+| GET | `/api/github/status` | `{ configured, repo, runner: { state, currentIssue?, lastCheck?, lastError?, tasks } \| null }` — мост GitHub |
+| POST | `/api/github/check` | `202` — проверить новые задачи сейчас; `400`, если исполнитель выключен |
 | GET | `/api/agent/mcp` | `{ configFiles, servers: [{ name, status, tools, error? }] }` — подключённые MCP-серверы |
 | GET | `/api/workspace/diagnostics` | `{ checks, diagnostics, unparsed }` — запуск typecheck/lint проекта и разобранные ошибки `{ path, line, column, severity, code?, message }` |
 | GET | `/api/workspace/info` | `{ root, name, recent, switchable }` — текущая папка проекта и недавние |

@@ -51,6 +51,9 @@ import { createDiagnosticsTool } from "../modules/agent/tools/diagnosticsTool.js
 import { mcpConfigFiles, McpManager } from "../modules/agent/mcp/McpManager.js";
 import { TerminalService } from "../infrastructure/terminal/TerminalService.js";
 import { CompletionService } from "../modules/completion/CompletionService.js";
+import { GitHubClient } from "../modules/github/GitHubClient.js";
+import { GitHubTaskRunner } from "../modules/github/GitHubTaskRunner.js";
+import { createGitHubTools } from "../modules/agent/tools/githubTools.js";
 import { createShellTools } from "../modules/agent/tools/shellTools.js";
 import { ProcessManager } from "../infrastructure/process/ProcessManager.js";
 import { PermissionService } from "../modules/agent/permissions/PermissionService.js";
@@ -110,6 +113,14 @@ export class Container {
     public readonly terminals: TerminalService;
 
     public readonly completion = new CompletionService();
+
+    /** Клиент GitHub, если заданы JUSTAI_GITHUB_TOKEN и JUSTAI_GITHUB_REPO. */
+    public readonly githubClient: GitHubClient | null = createGitHubClient();
+
+    /** Исполнитель задач из GitHub (JUSTAI_GITHUB_RUNNER=on). */
+    public githubRunner?: GitHubTaskRunner;
+
+    private readonly permissions: PermissionService;
 
     private readonly configService: ConfigService;
     private readonly logger: ILogger;
@@ -294,6 +305,7 @@ export class Container {
             createDiagnosticsTool(this.diagnostics),
             ...createGitTools(this.gitService, this.workspaceRoot),
             createTodoTool(),
+            ...createGitHubTools(() => this.githubClient, () => githubLabel()),
             ...createWebTools(),
             ...createBrowserTools(this.browserService),
             ...createWordTools(this.microsoftGraph),
@@ -315,6 +327,9 @@ export class Container {
                 rulesFile: path.join(this.workspaceRoot, ".justai", "permissions.json"),
                 emit: broadcast,
             });
+
+        this.permissions =
+            permissions;
 
         const executorRunner =
             new ExecutorRunner({
@@ -404,6 +419,30 @@ export class Container {
         for (const server of this.mcp.status().filter(item => item.status === "failed")) {
             this.logger.warn(`MCP server '${server.name}' failed: ${server.error ?? "unknown error"}`);
         }
+
+        // Мост GitHub: задачи из issues выполняет этот компьютер.
+        if (this.githubClient && process.env.JUSTAI_GITHUB_RUNNER === "on") {
+            this.githubRunner = new GitHubTaskRunner({
+                client: this.githubClient,
+                git: this.gitService,
+                sessions: this.sessionManager,
+                permissions: this.permissions,
+                workspaceRoot: this.workspaceRoot,
+                config: {
+                    label: githubLabel(),
+                    allowedUsers: (process.env.JUSTAI_GITHUB_ALLOWED_USERS ?? "").split(",").map(user => user.trim()).filter(Boolean),
+                    profile: process.env.JUSTAI_GITHUB_PROFILE || "coder",
+                    provider: process.env.JUSTAI_GITHUB_PROVIDER || "ollama",
+                    ...(process.env.JUSTAI_GITHUB_MODEL ? { model: process.env.JUSTAI_GITHUB_MODEL } : {}),
+                    ...(process.env.JUSTAI_GITHUB_EXECUTOR ? { executorProvider: process.env.JUSTAI_GITHUB_EXECUTOR } : {}),
+                    pollMs: (Number(process.env.JUSTAI_GITHUB_POLL_SEC) || 60) * 1000,
+                    allowPublic: process.env.JUSTAI_GITHUB_ALLOW_PUBLIC === "on",
+                    token: process.env.JUSTAI_GITHUB_TOKEN ?? "",
+                },
+                log: message => this.logger.info(message),
+            });
+            this.githubRunner.start();
+        }
     }
 
     public getAvailableTools(): string[] {
@@ -414,7 +453,9 @@ export class Container {
 
     /** Остановить всё, что держит папку проекта: процессы агента, браузер, сессии. */
     public async dispose(): Promise<void> {
+        const runnerStopped = this.githubRunner?.stop();
         await this.sessionManager.stopAll();
+        await runnerStopped;
         this.terminals.closeAll();
 
         await Promise.allSettled([
@@ -422,6 +463,27 @@ export class Container {
             this.browserService.closeAll(),
             this.mcp.stop(),
         ]);
+    }
+}
+
+function githubLabel(): string {
+    return process.env.JUSTAI_GITHUB_LABEL?.trim() || "justai";
+}
+
+/** Клиент GitHub из настроек; неверное имя репозитория — без клиента (инструменты объяснят, что настроить). */
+function createGitHubClient(): GitHubClient | null {
+    const token = process.env.JUSTAI_GITHUB_TOKEN?.trim();
+    const repo = process.env.JUSTAI_GITHUB_REPO?.trim().replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "");
+
+    if (!token || !repo) {
+        return null;
+    }
+
+    try {
+        return new GitHubClient(token, repo);
+    }
+    catch {
+        return null;
     }
 }
 

@@ -43,6 +43,14 @@ export function settingFields(): FieldSpec[] {
     }
 
     fields.push(
+        { key: "JUSTAI_GITHUB_TOKEN", label: "Токен GitHub (fine-grained: Issues, Pull requests, Contents — чтение и запись)", group: "GitHub", kind: "secret" },
+        { key: "JUSTAI_GITHUB_REPO", label: "Репозиторий (владелец/имя)", group: "GitHub", kind: "text", placeholder: "user/my-project" },
+        { key: "JUSTAI_GITHUB_RUNNER", label: "Брать задачи из GitHub на этом ПК (on/off)", group: "GitHub", kind: "text", placeholder: "off" },
+        { key: "JUSTAI_GITHUB_PROVIDER", label: "Кто выполняет задачи", group: "GitHub", kind: "provider" },
+        { key: "JUSTAI_GITHUB_PROFILE", label: "Профиль исполнителя (coder или planner)", group: "GitHub", kind: "text", placeholder: "coder" },
+        { key: "JUSTAI_GITHUB_LABEL", label: "Метка задач", group: "GitHub", kind: "text", placeholder: "justai" },
+        { key: "JUSTAI_GITHUB_ALLOWED_USERS", label: "Кто может ставить задачи (логины через запятую; пусто — владелец токена)", group: "GitHub", kind: "text" },
+        { key: "JUSTAI_GITHUB_POLL_SEC", label: "Проверять новые задачи каждые (секунд)", group: "GitHub", kind: "number", placeholder: "60" },
         { key: "JUSTAI_COMPLETION_MODEL", label: "Модель подсказок по Tab в Ollama (off — выключить)", group: "Редактор", kind: "text", placeholder: "qwen2.5-coder:7b" },
         { key: "JUSTAI_EMBED_PROVIDER", label: "Провайдер эмбеддингов (поиск по смыслу)", group: "Поиск по коду", kind: "provider" },
         { key: "JUSTAI_EMBED_MODEL", label: "Модель эмбеддингов", group: "Поиск по коду", kind: "text", placeholder: "nomic-embed-text" },

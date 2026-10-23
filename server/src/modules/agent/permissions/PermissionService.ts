@@ -77,6 +77,18 @@ export class PermissionService {
     /**
      * Авторизатор для сессии. Режим читается при каждом решении — его можно менять на ходу.
      */
+    /** Сессии без присмотра: вопросы пользователю не задаются, такие действия отклоняются сразу. */
+    private readonly unattended = new Set<string>();
+
+    public setUnattended(sessionId: string, unattended: boolean): void {
+        if (unattended) {
+            this.unattended.add(sessionId);
+        }
+        else {
+            this.unattended.delete(sessionId);
+        }
+    }
+
     public forSession(sessionId: string, mode: () => PermissionMode): Authorizer {
         return {
             authorize: request => this.authorize(request, mode(), sessionId),
@@ -122,6 +134,14 @@ export class PermissionService {
 
         if (assessment.action === "allow") {
             return { allowed: true };
+        }
+
+        // Задача без присмотра (из GitHub): спросить некого — действие, требующее подтверждения, не выполняется.
+        if (this.unattended.has(sessionId)) {
+            return {
+                allowed: false,
+                message: `This task runs unattended (from GitHub), so actions that need the user's approval are not allowed (${assessment.reason}). Do it another way, or describe what is needed in your final report.`,
+            };
         }
 
         const permission: PermissionRequest = {

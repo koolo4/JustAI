@@ -250,6 +250,30 @@ export class Server {
             res.status(204).end();
         });
 
+        // Мост GitHub: состояние исполнителя задач и ручная проверка.
+        this.app.get('/api/github/status', (_req, res) => {
+            const client = this.container.githubClient;
+            const runner = this.container.githubRunner;
+
+            res.json({
+                configured: client !== null,
+                repo: client?.repo ?? null,
+                runner: runner?.getStatus() ?? null,
+            });
+        });
+
+        this.app.post('/api/github/check', (_req, res, next) => {
+            const runner = this.container.githubRunner;
+
+            if (!runner) {
+                next(new BadRequestError('The GitHub task runner is off: set the token and repository and enable it in Settings → GitHub.'));
+                return;
+            }
+
+            void runner.check();
+            res.status(202).json(runner.getStatus());
+        });
+
         // Подключённые MCP-серверы и их инструменты.
         this.app.get(
             '/api/agent/mcp',
