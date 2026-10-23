@@ -120,6 +120,8 @@ export class Container {
     /** Исполнитель задач из GitHub (JUSTAI_GITHUB_RUNNER=on). */
     public githubRunner?: GitHubTaskRunner;
 
+    private readonly verifier: Verifier;
+
     private readonly permissions: PermissionService;
 
     private readonly configService: ConfigService;
@@ -331,6 +333,14 @@ export class Container {
         this.permissions =
             permissions;
 
+        this.verifier =
+            new Verifier({
+                processes: this.processManager,
+                workspaceRoot: this.workspaceRoot,
+                kinds: verifyKindsFromEnv(process.env.JUSTAI_VERIFY),
+                timeoutMs: Number(process.env.JUSTAI_VERIFY_TIMEOUT_MS) || 300_000,
+            });
+
         const executorRunner =
             new ExecutorRunner({
                 providers: this.providerRegistry,
@@ -358,12 +368,7 @@ export class Container {
                 shouldIgnore,
                 limits: budgetFromEnv(),
                 permissions,
-                verifier: new Verifier({
-                    processes: this.processManager,
-                    workspaceRoot: this.workspaceRoot,
-                    kinds: verifyKindsFromEnv(process.env.JUSTAI_VERIFY),
-                    timeoutMs: Number(process.env.JUSTAI_VERIFY_TIMEOUT_MS) || 300_000,
-                }),
+                verifier: this.verifier,
                 ...(process.env.JUSTAI_SUBAGENT_PROVIDER
                     ? { subagentProvider: process.env.JUSTAI_SUBAGENT_PROVIDER }
                     : {}),
@@ -428,6 +433,9 @@ export class Container {
                 sessions: this.sessionManager,
                 permissions: this.permissions,
                 workspaceRoot: this.workspaceRoot,
+                verifier: this.verifier,
+                processes: this.processManager,
+                browser: this.browserService,
                 config: {
                     label: githubLabel(),
                     allowedUsers: (process.env.JUSTAI_GITHUB_ALLOWED_USERS ?? "").split(",").map(user => user.trim()).filter(Boolean),

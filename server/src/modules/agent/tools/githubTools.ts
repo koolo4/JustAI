@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import type { GitHubClient } from "../../github/GitHubClient.js";
-import { LABELS } from "../../github/GitHubTaskRunner.js";
+import { isTestTask, LABELS } from "../../github/GitHubTaskRunner.js";
 import { defineTool, ToolError, type Tool } from "./Tool.js";
 
 const MAX_DIFF_CHARS = 60_000;
@@ -53,12 +53,58 @@ export function createGitHubTools(client: () => GitHubClient | null, label: () =
             }
 
             return issues.map(issue => {
+                const test = isTestTask(issue, label());
                 const state = issue.labels.includes(LABELS.working) ? "working"
-                    : issue.labels.includes(LABELS.review) ? "review (pull request ready)"
-                        : issue.labels.includes(LABELS.failed) ? "failed"
-                            : "new";
-                return `#${issue.number} [${state}] ${issue.title} — ${issue.url}`;
+                    : issue.labels.includes(LABELS.paused) ? "paused (stopped on request)"
+                        : issue.labels.includes(LABELS.review) ? (test ? "tested: PASS" : "review (pull request ready)")
+                            : issue.labels.includes(LABELS.failed) ? (test ? "tested: FAIL" : "failed")
+                                : "new";
+                return `#${issue.number} [${test ? "test, " : ""}${state}] ${issue.title} — ${issue.url}`;
             }).join("\n");
+        },
+    });
+
+    const testTask = defineTool({
+        name: "github_test_task",
+        description: [
+            "Asks the coding agent's computer to TEST the project without changing it: run tests or scripts, start the app and check it in a real browser",
+            "(clicks, typing, console errors) and take screenshots. The result (PASS/FAIL, step-by-step report, project checks, screenshots) is posted to the new issue;",
+            "read it with github_review_task. Pass `of_task` to test the branch of that task (its pull request) instead of the main branch.",
+        ].join(" "),
+        inputSchema: z.object({
+            title: z.string().min(3).max(200),
+            steps: z.string().min(10).max(30_000).describe("What to check, step by step: commands, pages, what to click, expected results, screen sizes."),
+            of_task: z.number().int().positive().optional(),
+        }),
+        kind: "network",
+        run: async ({ title, steps, of_task }) => {
+            const body = `${steps.trim()}\n\n/${label()} test${of_task ? ` #${of_task}` : ""}`;
+            const issue = await github().createIssue(`[${label()}-test] ${title}`, body, [label()]);
+            return `Created test task #${issue.number}: ${issue.url}`;
+        },
+    });
+
+    const runCommand = defineTool({
+        name: "github_run_command",
+        description: [
+            "Runs one shell command on the coding agent's computer, on the branch of a task (or the main branch), and posts the exit code and output tail to the issue.",
+            "For quick checks like `npm test` or `npm run build`. Destructive commands are refused. Read the result with github_review_task after a minute.",
+        ].join(" "),
+        inputSchema: z.object({
+            command: z.string().min(1).max(500),
+            task: z.number().int().positive().optional().describe("Task issue whose branch to use; omit for the main branch."),
+        }),
+        kind: "network",
+        run: async ({ command, task }) => {
+            const line = `/${label()} run ${command.replace(/\s*\n\s*/g, " ").trim()}`;
+
+            if (task) {
+                await github().comment(task, line, false);
+                return `Command posted to #${task}; the result will appear there as a comment.`;
+            }
+
+            const issue = await github().createIssue(`Run: ${command.slice(0, 80)}`, line, []);
+            return `Command posted as #${issue.number}; the result will appear there as a comment.`;
         },
     });
 
@@ -70,12 +116,17 @@ export function createGitHubTools(client: () => GitHubClient | null, label: () =
         run: async ({ issue }) => {
             const current = github();
             const comments = await current.listComments(issue);
-            const report = [...comments].reverse().find(item => item.body.includes("**JustAI**"));
+            const reports = comments.filter(item => item.body.includes("**JustAI**"));
+            const report = reports.at(-1);
+            // Результаты «/justai run», пришедшие после итогового отчёта, тоже нужны планировщику.
+            const runs = reports.filter(item => item.body.includes("▶ **JustAI**") && item !== report).slice(-3);
             const pull = await current.findPullRequest(`justai/issue-${issue}`);
             const diff = pull ? await current.pullRequestDiff(pull.number) : "";
+            const clean = (body: string) => body.replace(/<!--[\s\S]*?-->/g, "").trim();
 
             return [
-                report ? `Latest report:\n${report.body.replace(/<!--[\s\S]*?-->/g, "").trim()}` : "No report yet.",
+                ...runs.map(item => `Command result:\n${clean(item.body)}\n`),
+                report ? `Latest report:\n${clean(report.body)}` : "No report yet.",
                 pull ? `\nPull request: ${pull.url}\n\nDiff:\n${diff.length > MAX_DIFF_CHARS ? `${diff.slice(0, MAX_DIFF_CHARS)}\n… (diff truncated)` : diff}` : "\nNo pull request yet.",
             ].join("\n");
         },
@@ -95,5 +146,5 @@ export function createGitHubTools(client: () => GitHubClient | null, label: () =
         },
     });
 
-    return [createTask, listTasks, reviewTask, requestChanges];
+    return [createTask, listTasks, reviewTask, requestChanges, testTask, runCommand];
 }

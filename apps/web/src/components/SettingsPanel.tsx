@@ -149,7 +149,14 @@ interface GitHubInfo {
         lastCheck?: string;
         lastError?: string;
         warning?: string;
-        tasks: Array<{ issue: number; status: "working" | "review" | "failed" | "paused"; branch: string; pullRequest?: string }>;
+        tasks: Array<{
+            issue: number;
+            status: "working" | "review" | "failed" | "paused";
+            branch: string;
+            pullRequest?: string;
+            kind?: "code" | "test";
+            checks?: "passed" | "failed" | "skipped";
+        }>;
     };
 }
 
@@ -161,6 +168,8 @@ const RUNNER_STATE: Record<NonNullable<GitHubInfo["runner"]>["state"], string> =
 };
 
 const TASK_STATE = { working: "в работе", review: "готов PR", failed: "не удалось", paused: "на паузе" } as const;
+const TEST_STATE = { working: "проверяется", review: "проверка: PASS", failed: "проверка: FAIL", paused: "на паузе" } as const;
+const CHECKS = { passed: " · проверки ✓", failed: " · проверки ✕", skipped: "" } as const;
 
 /** Мост GitHub: что настроено, что делает исполнитель задач. Настраивается полями раздела GitHub ниже. */
 function GitHubStatus() {
@@ -218,8 +227,12 @@ function GitHubStatus() {
 
             {runner?.tasks.map(task => (
                 <div key={task.issue} className="setting-row">
-                    <span className="setting-label">Задача #{task.issue}<code className="muted">{task.branch}</code></span>
-                    <span className={task.status === "failed" ? "error-text" : "muted"}>{TASK_STATE[task.status]}</span>
+                    <span className="setting-label">
+                        {task.kind === "test" ? "Проверка" : "Задача"} #{task.issue}<code className="muted">{task.branch}</code>
+                    </span>
+                    <span className={task.status === "failed" || task.checks === "failed" ? "error-text" : "muted"}>
+                        {(task.kind === "test" ? TEST_STATE : TASK_STATE)[task.status]}{task.checks ? CHECKS[task.checks] : ""}
+                    </span>
                     <span className="setting-meta muted">
                         {task.pullRequest && <a href={task.pullRequest} target="_blank" rel="noreferrer">PR</a>}
                     </span>

@@ -135,6 +135,33 @@ export class GitHubClient {
         return this.request<string>(`${this.base}/pulls/${number}`, { accept: "application/vnd.github.diff" });
     }
 
+    /**
+     * Файл в служебную ветку (например, скриншот для отчёта); ветки нет — создаётся от основной.
+     * Возвращает адрес, по которому файл открывается из комментария.
+     */
+    public async uploadFile(branch: string, filePath: string, base64: string, message: string): Promise<string> {
+        await this.ensureBranch(branch);
+
+        const encoded = filePath.split("/").map(encodeURIComponent).join("/");
+        await this.request(`${this.base}/contents/${encoded}`, { method: "PUT", body: { message, content: base64, branch } });
+
+        return `https://github.com/${this.repo}/blob/${encodeURIComponent(branch)}/${encoded}?raw=true`;
+    }
+
+    private async ensureBranch(branch: string): Promise<void> {
+        try {
+            await this.request(`${this.base}/git/ref/heads/${encodeURIComponent(branch)}`);
+            return;
+        }
+        catch (error) {
+            if (!(error instanceof GitHubError && error.status === 404)) throw error;
+        }
+
+        const base = await this.defaultBranch();
+        const head = await this.request<{ object: { sha: string } }>(`${this.base}/git/ref/heads/${encodeURIComponent(base)}`);
+        await this.request(`${this.base}/git/refs`, { method: "POST", body: { ref: `refs/heads/${branch}`, sha: head.object.sha } });
+    }
+
     private async request<T>(url: string, options: { method?: string; body?: unknown; accept?: string } = {}): Promise<T> {
         const response = await this.fetchImpl(url, {
             method: options.method ?? "GET",

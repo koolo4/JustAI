@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -21,7 +21,12 @@ import { ToolRegistry } from "../../../src/modules/agent/tools/ToolRegistry.js";
 import { defineTool } from "../../../src/modules/agent/tools/Tool.js";
 import { createMessage } from "../../../src/modules/agent/runtime/AgentLoop.js";
 import { BOT_MARKER, GitHubError, type GitHubClient, type GitHubComment, type GitHubIssue } from "../../../src/modules/github/GitHubClient.js";
-import { followUpCommand, followUpTarget, GitHubTaskRunner, isStopCommand, isTask, LABELS, originMatches, progressReport, stripCommands, taskPrompt } from "../../../src/modules/github/GitHubTaskRunner.js";
+import { ProcessManager } from "../../../src/infrastructure/process/ProcessManager.js";
+import { Verifier } from "../../../src/modules/agent/runtime/Verifier.js";
+import {
+    ARTIFACTS_BRANCH, checksReport, followUpCommand, followUpTarget, GitHubTaskRunner, isStopCommand, isTask, isTestTask, LABELS, originMatches,
+    progressReport, runCommentCommand, runIssueCommand, stripCommands, taskPrompt, testTarget, testVerdict,
+} from "../../../src/modules/github/GitHubTaskRunner.js";
 
 const git = new GitService();
 
@@ -90,6 +95,12 @@ class FakeGitHub {
         const pull = { number: 100 + this.pulls.length, url: `https://github.com/me/project/pull/${100 + this.pulls.length}`, head, base, body };
         this.pulls.push(pull);
         return { number: pull.number, url: pull.url, head, state: "open" };
+    }
+
+    public uploads: Array<{ branch: string; path: string }> = [];
+    public async uploadFile(branch: string, filePath: string) {
+        this.uploads.push({ branch, path: filePath });
+        return `https://github.com/me/project/blob/${branch}/${filePath}?raw=true`;
     }
 
     public issue(number: number, title: string, author = "me", options: { body?: string; labels?: string[] } = {}): GitHubIssue {
@@ -174,7 +185,7 @@ describe.skipIf(!git.available)("GitHubTaskRunner", () => {
         // Рабочая папка вернулась на основную ветку и чистая.
         expect(run(root, "rev-parse", "--abbrev-ref", "HEAD").trim()).toBe("main");
         expect(existsSync(path.join(root, "notes", "todo.md"))).toBe(false);
-        expect(runner.getStatus().tasks).toEqual([{ issue: 1, status: "review", branch: "justai/issue-1", pullRequest: "https://github.com/me/project/pull/100" }]);
+        expect(runner.getStatus().tasks).toEqual([{ issue: 1, status: "review", branch: "justai/issue-1", kind: "code", pullRequest: "https://github.com/me/project/pull/100" }]);
         // Сессию моста видно в списке сессий по понятному названию.
         expect((await sessions.list()).map(session => session.title)).toEqual(["GitHub #1: создай файл notes/todo.md"]);
     }, 60_000);
@@ -338,6 +349,154 @@ describe.skipIf(!git.available)("GitHubTaskRunner", () => {
             .filter(item => item.role === "user" && item.content.some(block => block.type === "text"));
         expect(prompts.map(item => (item.content[0] as { text: string }).text.split("\n")[0])).toEqual(["прочитай slow.txt", "прочитай other.txt"]);
     }, 60_000);
+
+    it("runs a test task without changing files: verdict, project checks and screenshots in the report", async () => {
+        await writeFile(path.join(root, "package.json"), JSON.stringify({ name: "p", scripts: { test: "node -e \"console.log('tests ok')\"" } }));
+        run(root, "add", "package.json");
+        run(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "package");
+        run(root, "push", "origin", "HEAD:main");
+
+        // «Браузер» проверяющего: снимок экрана и мусор в папке, который после проверки должен исчезнуть.
+        const tools = new ToolRegistry();
+        tools.register(defineTool({
+            name: "read_file",
+            description: "fake screenshot",
+            inputSchema: z.object({ path: z.string() }),
+            kind: "read",
+            run: async () => {
+                await writeFile(path.join(root, "leftover.txt"), "test output");
+                return [
+                    { type: "text", text: "Screenshot of http://localhost:5173/ (viewport 375×812)." },
+                    { type: "image", mediaType: "image/png", dataBase64: "iVBORw0KGgo=" },
+                ];
+            },
+        }));
+
+        const permissions = new PermissionService({ rulesFile: path.join(root, ".justai", "p3.json"), emit: () => undefined });
+        const testSessions = new SessionManager({
+            store: new SessionStore(path.join(root, ".justai", "sessions")),
+            providers: new ProviderRegistry({ JUSTAI_LAST_RESORT: "off" }),
+            tools,
+            profiles: new AgentProfiles(),
+            workspaceRoot: root,
+            shouldIgnore: name => name === ".justai",
+            limits: DEFAULT_BUDGET,
+            permissions,
+            emit: () => undefined,
+        });
+        const processes = new ProcessManager();
+        const tester = new GitHubTaskRunner({
+            client: github as unknown as GitHubClient,
+            git,
+            sessions: testSessions,
+            permissions,
+            workspaceRoot: root,
+            processes,
+            verifier: new Verifier({ processes, workspaceRoot: root, kinds: ["test"], timeoutMs: 60_000 }),
+            config: { label: "justai", allowedUsers: [], profile: "coder", provider: "mock", pollMs: 60_000, allowPublic: false, token: "" },
+        });
+
+        github.issue(60, "[justai-test] прочитай страницу", "me", { labels: [] });
+        await tester.check();
+
+        const report = github.comments.get(60)!.at(-1)!.body;
+        expect(report).toContain("результат проверки: ✅ PASS");
+        expect(report).toContain("ветка `main`");
+        expect(report).toContain("Проверки проекта");
+        expect(report).toContain("✅ все прошли (1)");
+        expect(report).toContain("viewport 375×812");
+        expect(report).toContain(`![скриншот 1](https://github.com/me/project/blob/${ARTIFACTS_BRANCH}/screenshots/issue-60/`);
+        expect(github.uploads).toEqual([expect.objectContaining({ branch: ARTIFACTS_BRANCH })]);
+
+        // Ничего не закоммичено, PR нет, следы проверки убраны, папка на основной ветке.
+        expect(github.pulls).toEqual([]);
+        expect(run(remote, "branch", "--list", "justai/*").trim()).toBe("");
+        expect(existsSync(path.join(root, "leftover.txt"))).toBe(false);
+        expect(run(root, "rev-parse", "--abbrev-ref", "HEAD").trim()).toBe("main");
+        expect(tester.getStatus().tasks).toEqual([{ issue: 60, status: "review", branch: "main", kind: "test", checks: "passed" }]);
+        expect(github.issues[0]!.labels).toContain(LABELS.review);
+
+        // Проверяющий работал без правки файлов.
+        expect((await testSessions.list())[0]!.profile).toBe("tester");
+    }, 90_000);
+
+    it("runs «/justai run» commands on a task branch and refuses destructive ones", async () => {
+        const processes = new ProcessManager();
+        const commands = new GitHubTaskRunner({
+            client: github as unknown as GitHubClient,
+            git,
+            sessions,
+            permissions: new PermissionService({ rulesFile: path.join(root, ".justai", "p4.json"), emit: () => undefined }),
+            workspaceRoot: root,
+            processes,
+            config: { label: "justai", allowedUsers: [], profile: "coder", provider: "mock", pollMs: 60_000, allowPublic: false, token: "" },
+        });
+
+        github.issue(70, "создай файл a.txt");
+        await commands.check();
+        const before = github.comments.get(70)!.length;
+
+        // Команда в комментарии: выполняется в ветке задачи, агент не запускается.
+        github.comments.get(70)!.push({ id: 500, author: "me", body: "/justai run node -p \"require('fs').existsSync('a.txt')\"", createdAt: "" });
+        github.comments.get(70)!.push({ id: 501, author: "me", body: "/justai run git push origin main", createdAt: "" });
+        await commands.check();
+
+        const replies = github.comments.get(70)!.slice(before + 2);
+        expect(replies[0]!.body).toContain("выполнил");
+        expect(replies[0]!.body).toContain("ветке `justai/issue-70`");
+        expect(replies[0]!.body).toContain("код выхода 0");
+        expect(replies[0]!.body).toContain("true");
+        expect(replies[1]!.body).toContain("⛔");
+        expect(await sessions.list()).toHaveLength(1);
+        expect(commands.getStatus().tasks[0]!.status).toBe("review");
+
+        // Повторно те же команды не выполняются.
+        await commands.check();
+        expect(github.comments.get(70)!.length).toBe(before + 4);
+
+        // Команда отдельным issue: результат в нём же, issue закрывается.
+        github.issue(71, "Run", "me", { labels: [], body: "/justai run #70 node -p \"1+1\"" });
+        await commands.check();
+        expect(github.comments.get(71)![0]!.body).toMatch(/код выхода 0[\s\S]*\n2\n/);
+        expect(github.closed).toContain(71);
+
+        expect(run(root, "rev-parse", "--abbrev-ref", "HEAD").trim()).toBe("main");
+        expect(run(root, "status", "--porcelain", "--", ".", ":(exclude).justai").trim()).toBe("");
+    }, 90_000);
+
+    it("recognises test tasks, run commands and test verdicts", () => {
+        const make = (title: string, body: string) => ({ number: 1, title, body, author: "me", labels: [], url: "", isPullRequest: false });
+
+        expect(isTestTask(make("[justai-test] Check the page", ""), "justai")).toBe(true);
+        expect(isTestTask(make("Check", "steps\n/justai test #4"), "justai")).toBe(true);
+        expect(isTestTask(make("[justai] Add page", ""), "justai")).toBe(false);
+        expect(isTask(make("[justai-test] Check", ""), "justai")).toBe(false);
+        expect(testTarget(make("Check", "/justai test #4"), "justai")).toBe(4);
+        expect(testTarget(make("Check", "/justai test"), "justai")).toBeNull();
+
+        expect(runIssueCommand(make("Run", "/justai run #3 npm test\n"), "justai")).toEqual({ target: 3, command: "npm test" });
+        expect(runIssueCommand(make("Run", "/justai run npm run build"), "justai")).toEqual({ command: "npm run build" });
+        expect(runIssueCommand(make("Task", "Описание\n/justai run npm test"), "justai")).toBeNull();
+        expect(runCommentCommand("/justai run npm test", "justai")).toBe("npm test");
+        expect(runCommentCommand("please run npm test", "justai")).toBeNull();
+        expect(followUpTarget(make("Run", "/justai run #3 npm test"), "justai")).toBeNull();
+
+        expect(testVerdict("all good\nRESULT: PASS")).toBe("pass");
+        expect(testVerdict("RESULT: PASS\n...\n**RESULT: FAIL**")).toBe("fail");
+        expect(testVerdict("no verdict")).toBe("unknown");
+
+        const report = checksReport({
+            status: "failed",
+            checks: [
+                { cwd: ".", command: "npm run typecheck", ok: true, exitCode: 0, output: "" },
+                { cwd: "web", command: "npm test", ok: false, exitCode: 1, output: "FAIL src/app.test.ts\nexpected 2" },
+            ],
+        });
+        expect(report).toContain("❌ не прошли: 1 из 2");
+        expect(report).toContain("- ✓ `npm run typecheck`");
+        expect(report).toContain("- ✕ `npm test` в web — код выхода 1");
+        expect(report).toContain("expected 2");
+    });
 
     it("builds a progress report with the plan, recent actions and repeated errors", () => {
         const messages = [

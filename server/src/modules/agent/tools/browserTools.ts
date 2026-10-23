@@ -49,22 +49,28 @@ export function createBrowserTools(browser: BrowserService): Tool[] {
 
     const screenshot = defineTool({
         name: "browser_screenshot",
-        description: "Takes a screenshot of the page opened with browser_open (the image is returned to models that support images).",
+        description: "Takes a screenshot of the page opened with browser_open (the image is returned to models that support images). Pass width to check another screen size, for example 375 for a phone.",
         inputSchema: z.object({
             full_page: z.boolean().default(false),
+            width: z.number().int().min(320).max(2560).optional().describe("Viewport width in pixels; it stays for later screenshots."),
         }),
         kind: "read",
-        run: async ({ full_page }, context) => {
+        run: async ({ full_page, width }, context) => {
             const { page } = await browser.page(context.sessionId);
 
             if (page.url() === "about:blank") {
                 throw new ToolError("No page is open. Call browser_open first.");
             }
 
+            if (width) {
+                await page.setViewportSize({ width, height: width < 768 ? 812 : 800 });
+            }
+
             const image = await page.screenshot({ fullPage: full_page, type: "png", timeout: ACTION_TIMEOUT_MS }).catch(fail);
+            const size = page.viewportSize();
 
             return [
-                { type: "text", text: `Screenshot of ${page.url()} (${full_page ? "full page" : "viewport 1280×800"}).` },
+                { type: "text", text: `Screenshot of ${page.url()} (${full_page ? "full page" : "viewport"} ${size ? `${size.width}×${size.height}` : ""}).` },
                 { type: "image", mediaType: "image/png", dataBase64: image.toString("base64") },
             ];
         },
