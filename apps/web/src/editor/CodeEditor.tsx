@@ -7,6 +7,7 @@ import type { DiagnosticsResponse } from "@justai/shared";
 
 import { apiFetch, readApiError } from "../services/http";
 import { languageFor } from "./monacoSetup";
+import { registerAiCompletion } from "./inlineCompletion";
 import { ProblemsPanel } from "./ProblemsPanel";
 import { isDirty, type EditorTab } from "./useEditorTabs";
 
@@ -37,6 +38,7 @@ export function CodeEditor(props: Props) {
     const handleMount: OnMount = (editor, monaco) => {
         editorRef.current = editor;
         monacoRef.current = monaco;
+        registerAiCompletion(monaco);
 
         editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
             const current = latest.current;
@@ -245,6 +247,7 @@ export function CodeEditor(props: Props) {
                                 automaticLayout: true,
                                 tabSize: 4,
                                 renderWhitespace: "selection",
+                                inlineSuggest: { enabled: true },
                             }}
                         />
                     </div>

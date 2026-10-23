@@ -173,6 +173,28 @@ export class Server {
 
         }
 
+        // Автодополнение в редакторе (локальная модель). Ошибки не показываются: просто нет подсказки.
+        this.app.post('/api/completion', (req, res) => {
+            const body = req.body as { path?: unknown; prefix?: unknown; suffix?: unknown } | undefined;
+
+            if (typeof body?.prefix !== 'string' || typeof body.suffix !== 'string') {
+                res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'Pass prefix and suffix.' } });
+                return;
+            }
+
+            const controller = new AbortController();
+            res.on('close', () => controller.abort());
+
+            this.container.completion
+                .complete({ path: String(body.path ?? ''), prefix: body.prefix, suffix: body.suffix }, controller.signal)
+                .then(completion => res.json({ completion, model: this.container.completion.model }))
+                .catch(() => {
+                    if (!res.headersSent) {
+                        res.json({ completion: '', model: this.container.completion.model });
+                    }
+                });
+        });
+
         // Терминалы пользователя: вывод приходит событиями terminal.output по WebSocket.
         const terminals =
             this.container.terminals;

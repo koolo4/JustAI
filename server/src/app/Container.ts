@@ -50,6 +50,7 @@ import { DiagnosticsService } from "../modules/agent/diagnostics/Diagnostics.js"
 import { createDiagnosticsTool } from "../modules/agent/tools/diagnosticsTool.js";
 import { mcpConfigFiles, McpManager } from "../modules/agent/mcp/McpManager.js";
 import { TerminalService } from "../infrastructure/terminal/TerminalService.js";
+import { CompletionService } from "../modules/completion/CompletionService.js";
 import { createShellTools } from "../modules/agent/tools/shellTools.js";
 import { ProcessManager } from "../infrastructure/process/ProcessManager.js";
 import { PermissionService } from "../modules/agent/permissions/PermissionService.js";
@@ -107,6 +108,8 @@ export class Container {
     public readonly mcp: McpManager;
 
     public readonly terminals: TerminalService;
+
+    public readonly completion = new CompletionService();
 
     private readonly configService: ConfigService;
     private readonly logger: ILogger;
