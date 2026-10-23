@@ -21,6 +21,8 @@ export interface Tool<Schema extends z.ZodType = z.ZodType> {
     /** Для модели: что делает, когда использовать, ограничения. */
     readonly description: string;
     readonly inputSchema: Schema;
+    /** Готовая JSON Schema входа для модели (инструменты MCP-серверов); иначе строится из inputSchema. */
+    readonly jsonSchema?: Record<string, unknown>;
     readonly kind: ToolKind;
     /** Спрашивать пользователя в любом режиме (например, git commit). */
     readonly requiresApproval?: boolean;

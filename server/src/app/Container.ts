@@ -48,6 +48,7 @@ import { CodeIndex } from "../modules/agent/index/CodeIndex.js";
 import { OpenAIEmbedder } from "../modules/agent/index/OpenAIEmbedder.js";
 import { DiagnosticsService } from "../modules/agent/diagnostics/Diagnostics.js";
 import { createDiagnosticsTool } from "../modules/agent/tools/diagnosticsTool.js";
+import { mcpConfigFiles, McpManager } from "../modules/agent/mcp/McpManager.js";
 import { createShellTools } from "../modules/agent/tools/shellTools.js";
 import { ProcessManager } from "../infrastructure/process/ProcessManager.js";
 import { PermissionService } from "../modules/agent/permissions/PermissionService.js";
@@ -101,6 +102,8 @@ export class Container {
     private codeIndex?: CodeIndex;
 
     public readonly diagnostics: DiagnosticsService;
+
+    public readonly mcp: McpManager;
 
     private readonly configService: ConfigService;
     private readonly logger: ILogger;
@@ -246,6 +249,11 @@ export class Container {
                     : {},
             );
 
+        this.mcp =
+            new McpManager(
+                mcpConfigFiles(resolveInstallRoot(), this.workspaceRoot),
+            );
+
         this.diagnostics =
             new DiagnosticsService(
                 this.processManager,
@@ -373,6 +381,17 @@ export class Container {
 
     public async initialize(): Promise<void> {
         await this.ignoreService.initialize();
+
+        // MCP-серверы подключаются при старте; упавший сервер не мешает остальным (статус — GET /api/agent/mcp).
+        for (const tool of await this.mcp.start()) {
+            if (!this.toolRegistry.get(tool.name)) {
+                this.toolRegistry.register(tool);
+            }
+        }
+
+        for (const server of this.mcp.status().filter(item => item.status === "failed")) {
+            this.logger.warn(`MCP server '${server.name}' failed: ${server.error ?? "unknown error"}`);
+        }
     }
 
     public getAvailableTools(): string[] {
@@ -388,6 +407,7 @@ export class Container {
         await Promise.allSettled([
             this.processManager.killAll(),
             this.browserService.closeAll(),
+            this.mcp.stop(),
         ]);
     }
 }

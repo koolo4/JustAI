@@ -26,14 +26,27 @@ export class ToolRegistry {
     /**
      * Подмножество инструментов по именам, в порядке регистрации.
      * Порядок стабилен — это важно для кэширования промпта.
+     * `mcp__*` — все инструменты подключённых MCP-серверов.
      */
     public select(names: readonly string[]): Tool[] {
-        return this.list().filter(tool => names.includes(tool.name));
+        const withMcp = names.includes(MCP_WILDCARD);
+        return this.list().filter(tool => names.includes(tool.name) || (withMcp && tool.name.startsWith("mcp__")));
+    }
+
+    /** Убрать инструменты (MCP-сервер отключён или переподключается). */
+    public unregister(predicate: (tool: Tool) => boolean): void {
+        for (const tool of this.list()) {
+            if (predicate(tool)) {
+                this.tools.delete(tool.name);
+            }
+        }
     }
 }
 
+export const MCP_WILDCARD = "mcp__*";
+
 export function toToolSpec(tool: Tool): ToolSpec {
-    const schema = z.toJSONSchema(tool.inputSchema) as Record<string, unknown>;
+    const schema = { ...(tool.jsonSchema ?? z.toJSONSchema(tool.inputSchema) as Record<string, unknown>) };
     delete schema.$schema;
 
     return {

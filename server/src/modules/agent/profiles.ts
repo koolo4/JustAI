@@ -14,7 +14,7 @@ const BROWSER_READ_TOOLS = ["browser_open", "browser_text", "browser_console", "
 const BROWSER_TOOLS = [...BROWSER_READ_TOOLS, "browser_click", "browser_type"];
 
 const CODE_TOOLS = [
-    "todo_write", "read_file", "list_dir", "glob", "grep", "search_code", "edit_file", "write_file", "diagnostics",
+    "todo_write", "read_file", "list_dir", "glob", "grep", "search_code", "edit_file", "write_file", "diagnostics", "mcp__*",
     "run_command", "read_output", "kill_process", "list_processes",
     "git_status", "git_diff", "git_log", "git_commit", "web_fetch",
     ...BROWSER_TOOLS,
@@ -38,7 +38,7 @@ const PROFILES: AgentProfile[] = [
         id: "planner",
         label: "Planner + local executor",
         description: "A strong model plans, writes exact changes and reviews; a local model (Ollama) runs commands and multi-step work.",
-        tools: ["todo_write", "read_file", "list_dir", "glob", "grep", "search_code", "write_file", "edit_file", "diagnostics", "git_status", "git_diff", "git_log", "web_fetch", ...BROWSER_READ_TOOLS, "spawn_agent", "delegate_task"],
+        tools: ["todo_write", "read_file", "list_dir", "glob", "grep", "search_code", "write_file", "edit_file", "diagnostics", "git_status", "git_diff", "git_log", "web_fetch", ...BROWSER_READ_TOOLS, "spawn_agent", "delegate_task", "mcp__*"],
         instructions: [
             "You are the planner in a two-agent setup. You cannot run commands yourself:",
             "a local executor model does that when you call delegate_task. You read code, plan, write exact content, delegate and review.",
@@ -61,7 +61,7 @@ const PROFILES: AgentProfile[] = [
         id: "docs",
         label: "Docs Writer",
         description: "Updates README, CHANGELOG and docs to match the code changes.",
-        tools: ["todo_write", "read_file", "list_dir", "glob", "grep", "search_code", "edit_file", "write_file", "diagnostics", "git_status", "git_diff", "git_log", "spawn_agent"],
+        tools: ["todo_write", "read_file", "list_dir", "glob", "grep", "search_code", "edit_file", "write_file", "diagnostics", "mcp__*", "git_status", "git_diff", "git_log", "spawn_agent"],
         instructions: [
             "You keep the project's documentation in sync with the code.",
             "Start from what changed: git_status, git_diff (and git_log for recent commits). Read the code you describe; never document behaviour you have not seen.",

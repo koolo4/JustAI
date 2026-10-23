@@ -116,6 +116,8 @@ export function SettingsPanel({ onClose }: Props) {
             {!settings && !error && <div className="muted settings-loading">Loading settings…</div>}
 
             <div className="settings-body">
+                <McpStatus />
+
                 {groups.map(([group, fields]) => (
                     <section key={group} className="settings-group">
                         <h3>{group}</h3>
@@ -134,6 +136,48 @@ export function SettingsPanel({ onClose }: Props) {
                 ))}
             </div>
         </div>
+    );
+}
+
+interface McpInfo {
+    configFiles: string[];
+    servers: Array<{ name: string; status: "connected" | "failed" | "disabled"; tools: string[]; error?: string }>;
+}
+
+/** MCP-серверы: только просмотр; настраиваются файлом .justai/mcp.json. */
+function McpStatus() {
+    const [info, setInfo] = useState<McpInfo | null>(null);
+
+    useEffect(() => {
+        apiFetch("/agent/mcp")
+            .then(async response => response.ok ? setInfo(await response.json() as McpInfo) : undefined)
+            .catch(() => undefined);
+    }, []);
+
+    if (!info) {
+        return null;
+    }
+
+    return (
+        <section className="settings-group">
+            <h3>MCP servers</h3>
+            {info.servers.length === 0 && (
+                <p className="muted setting-hint">
+                    No MCP servers. Describe them in <code>{info.configFiles.at(-1)}</code> as
+                    {" "}<code>{"{ \"mcpServers\": { \"name\": { \"command\": \"npx\", \"args\": [\"…\"] } } }"}</code> and restart the server.
+                </p>
+            )}
+            {info.servers.map(server => (
+                <div key={server.name} className="setting-row">
+                    <span className="setting-label">{server.name}</span>
+                    <span className={server.status === "failed" ? "error-text" : "muted"}>
+                        {server.status === "connected" ? `${server.tools.length} tool(s)` : server.status}
+                        {server.error ? `: ${server.error}` : ""}
+                    </span>
+                    <span className="setting-meta muted">{server.status}</span>
+                </div>
+            ))}
+        </section>
     );
 }
 

@@ -19,6 +19,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.137.0",
     "@justai/shared": "*",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@vscode/ripgrep": "^1.18.0",
     "cors": "^2.8.5",
     "diff": "^9.0.0",

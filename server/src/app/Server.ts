@@ -173,6 +173,14 @@ export class Server {
 
         }
 
+        // Подключённые MCP-серверы и их инструменты.
+        this.app.get(
+            '/api/agent/mcp',
+            (_req, res) => {
+                res.json({ configFiles: this.container.mcp.configFiles, servers: this.container.mcp.status() });
+            },
+        );
+
         // Ошибки компилятора и линтера для редактора (те же проверки, что у инструмента diagnostics).
         this.app.get(
             '/api/workspace/diagnostics',

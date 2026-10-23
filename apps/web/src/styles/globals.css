@@ -599,6 +599,10 @@ button {
     resize: vertical;
 }
 
+.setting-hint { font-size: 13px; line-height: 1.5; }
+.setting-hint code { word-break: break-all; }
+.error-text { color: #f56565; font-size: 13px; }
+
 .problems-panel {
     display: flex;
     flex-direction: column;
