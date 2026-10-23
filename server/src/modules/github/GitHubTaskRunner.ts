@@ -124,6 +124,13 @@ export class GitHubTaskRunner {
             throw new Error(`Repository ${client.repo} is public: anyone could post tasks that run on this computer. Make it private or set JUSTAI_GITHUB_ALLOW_PUBLIC=on.`);
         }
 
+        // Папка проекта должна быть клоном именно этого репозитория: иначе можно отправить в него чужой код.
+        const origin = await this.git(["remote", "get-url", "origin"]).catch(() => "");
+
+        if (!originMatches(origin, client.repo)) {
+            throw new Error(`The project folder is not a clone of ${client.repo} (origin: ${origin.trim() || "none"}). Clone the repository and open that folder in JustAI (📁).`);
+        }
+
         const allowed = await this.allowedUsers();
         const state = await this.load();
         const issues = (await client.listIssues(config.label)).filter(issue => !issue.isPullRequest && allowed.has(issue.author.toLowerCase()));
@@ -328,6 +335,26 @@ export class GitHubTaskRunner {
             })),
         };
     }
+}
+
+/**
+ * origin указывает на owner/name на GitHub: https://github.com/owner/name(.git), git@github.com:owner/name.git.
+ * Локальный путь (bare-репозиторий в тестах) принимается: проверить по нему владельца нельзя.
+ */
+export function originMatches(origin: string, repo: string): boolean {
+    const url = origin.trim();
+
+    if (!url) {
+        return false;
+    }
+
+    const match = /github\.com[:/]([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(url);
+
+    if (match) {
+        return match[1]!.toLowerCase() === repo.toLowerCase();
+    }
+
+    return !/^[a-z]+:\/\//i.test(url) && !/^[\w.-]+@/.test(url);
 }
 
 export function taskPrompt(issue: GitHubIssue, branch: string): string {

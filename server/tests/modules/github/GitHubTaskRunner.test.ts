@@ -18,7 +18,7 @@ import { AgentFileSystem } from "../../../src/modules/agent/tools/AgentFileSyste
 import { createFileTools } from "../../../src/modules/agent/tools/fileTools.js";
 import { ToolRegistry } from "../../../src/modules/agent/tools/ToolRegistry.js";
 import { BOT_MARKER, type GitHubClient, type GitHubComment, type GitHubIssue } from "../../../src/modules/github/GitHubClient.js";
-import { GitHubTaskRunner, LABELS, taskPrompt } from "../../../src/modules/github/GitHubTaskRunner.js";
+import { GitHubTaskRunner, LABELS, originMatches, taskPrompt } from "../../../src/modules/github/GitHubTaskRunner.js";
 
 const git = new GitService();
 
@@ -183,6 +183,16 @@ describe.skipIf(!git.available)("GitHubTaskRunner", () => {
         expect(runner.getStatus().lastError).toContain("uncommitted changes");
         expect(github.comments.get(4)).toBeUndefined();
     }, 60_000);
+
+    it("works only in a clone of the configured repository", () => {
+        expect(originMatches("https://github.com/koolo4/test_1.git", "koolo4/test_1")).toBe(true);
+        expect(originMatches("https://github.com/Koolo4/Test_1", "koolo4/test_1")).toBe(true);
+        expect(originMatches("git@github.com:koolo4/test_1.git", "koolo4/test_1")).toBe(true);
+        expect(originMatches("https://github.com/koolo4/other.git", "koolo4/test_1")).toBe(false);
+        expect(originMatches("https://gitlab.com/koolo4/test_1.git", "koolo4/test_1")).toBe(false);
+        expect(originMatches("", "koolo4/test_1")).toBe(false);
+        expect(originMatches("C:\\temp\\remote.git", "koolo4/test_1")).toBe(true);
+    });
 
     it("puts the task title first in the prompt", () => {
         const prompt = taskPrompt({ number: 7, title: "Add login page", body: "Use React.", author: "me", labels: [], url: "", isPullRequest: false }, "justai/issue-7");
