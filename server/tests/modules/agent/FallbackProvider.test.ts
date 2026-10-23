@@ -127,6 +127,8 @@ describe("FallbackProvider", () => {
         expect(await answer(provider)).toBe("reserve1");
         expect(isExhausted(new HttpError(502, "Bad gateway"))).toBe(true);
         expect(isExhausted(new HttpError(504, "Gateway timeout"))).toBe(true);
+        // Сервер недоступен (OpenAI SDK: APIConnectionError без статуса).
+        expect(isExhausted(new Error("Connection error."))).toBe(true);
     });
 
     it("recognises exhausted-resource errors", () => {
@@ -139,10 +141,27 @@ describe("FallbackProvider", () => {
 });
 
 describe("ProviderRegistry reserves", () => {
+    it("ends every chain with the local model unless it is switched off", () => {
+        const registry = new ProviderRegistry({ GROQ_API_KEY: "k" });
+
+        expect(registry.lastResort()).toBe("ollama");
+        expect(registry.create("groq")).toBeInstanceOf(FallbackProvider);
+        // Сама локальная модель без облачных резервов не оборачивается.
+        expect(registry.create("ollama")).not.toBeInstanceOf(FallbackProvider);
+
+        const off = new ProviderRegistry({ GROQ_API_KEY: "k", JUSTAI_LAST_RESORT: "off" });
+        expect(off.lastResort()).toBeNull();
+        expect(off.create("groq")).not.toBeInstanceOf(FallbackProvider);
+
+        // Не настроенный провайдер (LM Studio без модели) последним звеном не становится.
+        expect(new ProviderRegistry({ JUSTAI_LAST_RESORT: "lmstudio" }).lastResort()).toBeNull();
+    });
+
     it("wraps providers only when a reserve has an address and a model", () => {
-        expect(new ProviderRegistry({ GROQ_API_KEY: "k" }).create("groq")).not.toBeInstanceOf(FallbackProvider);
+        expect(new ProviderRegistry({ GROQ_API_KEY: "k", JUSTAI_LAST_RESORT: "off" }).create("groq")).not.toBeInstanceOf(FallbackProvider);
 
         const registry = new ProviderRegistry({
+            JUSTAI_LAST_RESORT: "off",
             GROQ_API_KEY: "k",
             RESERVE1_BASE_URL: "https://example.invalid/v1",
             RESERVE1_MODEL: "some-model",

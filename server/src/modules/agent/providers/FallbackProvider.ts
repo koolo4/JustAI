@@ -100,7 +100,7 @@ export class FallbackProvider implements ModelProvider {
 
 /** Лимиты (402, 413, 429) и недоступность сервера: тайм-аут (408, 504), сбой (500, 502, 503, 529). */
 const EXHAUSTED_STATUS = new Set([402, 408, 413, 429, 500, 502, 503, 504, 529]);
-const EXHAUSTED_TEXT = /quota|rate.?limit|insufficient|credit|tokens per (minute|day)|requests per|overloaded|too many requests|time.?out|timed out|upstream|unavailable|bad gateway|econnreset|econnrefused|socket hang up|could not read the model stream/i;
+const EXHAUSTED_TEXT = /quota|rate.?limit|insufficient|credit|tokens per (minute|day)|requests per|overloaded|too many requests|time.?out|timed out|upstream|unavailable|bad gateway|econnreset|econnrefused|socket hang up|connection error|fetch failed|could not read the model stream/i;
 
 /** Ошибка означает «этот провайдер сейчас не может ответить» (лимит, сбой, тайм-аут), а не «запрос плохой». */
 export function isExhausted(error: unknown): boolean {

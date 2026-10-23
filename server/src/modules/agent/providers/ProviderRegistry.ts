@@ -59,12 +59,14 @@ export class ProviderRegistry {
     }
 
     /**
-     * Создаёт провайдера; если настроены резервы (RESERVE1_*, RESERVE2_*), оборачивает его так,
-     * чтобы при исчерпании токенов или лимита ход уходил резерву.
+     * Создаёт провайдера; если настроены резервы (RESERVE1_*…RESERVE3_*) или последний резерв (локальная модель),
+     * оборачивает его так, чтобы при исчерпании токенов, лимита или сбое ход уходил дальше по цепочке.
      */
     public create(id: string, model?: string): ModelProvider {
         const primary = this.createSingle(id, model);
-        const reserves = this.configuredReserves().filter(reserve => reserve !== id);
+        const lastResort = this.lastResort();
+        const reserves = [...this.configuredReserves(), ...(lastResort ? [lastResort] : [])]
+            .filter((reserve, index, list) => reserve !== id && list.indexOf(reserve) === index);
 
         if (id === "mock" || RESERVE_IDS.includes(id as typeof RESERVE_IDS[number]) || reserves.length === 0) {
             return primary;
@@ -77,6 +79,21 @@ export class ProviderRegistry {
             onSwitch: (from, to, reason) =>
                 console.warn(`[reserve] ${from.id}/${from.model} → ${to.id}/${to.model}: ${reason.slice(0, 200)}`),
         });
+    }
+
+    /**
+     * Последнее звено цепочки: локальная модель без лимитов (по умолчанию Ollama).
+     * JUSTAI_LAST_RESORT — id провайдера (ollama, lmstudio…) или "off".
+     */
+    public lastResort(): string | null {
+        const id = this.env.JUSTAI_LAST_RESORT?.trim() || "ollama";
+
+        if (id === "off" || id === "mock") {
+            return null;
+        }
+
+        const preset = findPreset(id);
+        return preset && resolvePreset(preset, this.env).configured ? id : null;
     }
 
     /** Резервы, у которых заданы адрес и модель. */

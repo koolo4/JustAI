@@ -46,6 +46,7 @@ export function settingFields(): FieldSpec[] {
         { key: "JUSTAI_COMPLETION_MODEL", label: "Модель подсказок по Tab в Ollama (off — выключить)", group: "Редактор", kind: "text", placeholder: "qwen2.5-coder:7b" },
         { key: "JUSTAI_EMBED_PROVIDER", label: "Провайдер эмбеддингов (поиск по смыслу)", group: "Поиск по коду", kind: "provider" },
         { key: "JUSTAI_EMBED_MODEL", label: "Модель эмбеддингов", group: "Поиск по коду", kind: "text", placeholder: "nomic-embed-text" },
+        { key: "JUSTAI_LAST_RESORT", label: "Последний резерв — локальная модель без лимитов (ollama, lmstudio или off)", group: "Резервы", kind: "text", placeholder: "ollama" },
         { key: "JUSTAI_RESERVE_COOLDOWN_SEC", label: "Вернуться к главному провайдеру через (секунд)", group: "Резервы", kind: "number", placeholder: "120" },
         { key: "JUSTAI_PROXY", label: "HTTP-прокси для облачных провайдеров", group: "Сеть", kind: "text", placeholder: "http://127.0.0.1:10809" },
         { key: "JUSTAI_NO_PROXY", label: "Адреса без прокси (через запятую)", group: "Сеть", kind: "text" },
