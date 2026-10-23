@@ -51,6 +51,8 @@ interface TaskState {
 
 interface StoredState {
     tasks: Record<string, TaskState>;
+    /** Служебные issues с правками, которые уже приняты. */
+    followUps?: number[];
 }
 
 const REPORT_CHARS = 3_000;
@@ -133,12 +135,39 @@ export class GitHubTaskRunner {
 
         const allowed = await this.allowedUsers();
         const state = await this.load();
-        const issues = (await client.listIssues(config.label)).filter(issue => !issue.isPullRequest && allowed.has(issue.author.toLowerCase()));
+        const open = (await client.listIssues()).filter(issue => !issue.isPullRequest && allowed.has(issue.author.toLowerCase()));
+
+        // Правки отдельным issue («/justai #3»): для планировщиков, которым GitHub не даёт комментировать.
+        for (const issue of open) {
+            const target = followUpTarget(issue, config.label);
+            const task = target === null ? undefined : state.tasks[target];
+
+            if (target === null || !task || task.status === "working" || state.followUps?.includes(issue.number)) {
+                continue;
+            }
+
+            state.followUps = [...state.followUps ?? [], issue.number];
+            await this.save(state);
+
+            await client.comment(issue.number, `Принято как правка к задаче #${target}. Отчёт будет в #${target}.`).catch(() => undefined);
+            await client.closeIssue(issue.number).catch(() => undefined);
+
+            const body = stripCommands(issue.body, config.label) || issue.title;
+            await this.run(await client.getIssue(target), state, [{ id: 0, author: issue.author, body, createdAt: "" }]);
+            return;
+        }
+
+        const issues = open.filter(issue => followUpTarget(issue, config.label) === null && isTask(issue, config.label));
 
         for (const issue of issues) {
             const task = state.tasks[issue.number];
 
             if (!task) {
+                // Задачу могли пометить маркером в тексте (метку ставит не каждая интеграция) — метку ставим сами.
+                if (!issue.labels.includes(config.label)) {
+                    await client.addLabels(issue.number, [config.label]);
+                }
+
                 await this.run(issue, state, []);
                 return;
             }
@@ -340,6 +369,32 @@ export class GitHubTaskRunner {
             })),
         };
     }
+}
+
+/**
+ * Задача для JustAI: метка, «[justai]» в начале заголовка или отдельная строка «/justai» в описании.
+ * Маркеры нужны интеграциям, которым GitHub разрешает создавать issues, но не ставить метки.
+ */
+export function isTask(issue: GitHubIssue, label: string): boolean {
+    const escaped = escapeRegExp(label);
+    return issue.labels.includes(label)
+        || new RegExp(`^\\s*\\[${escaped}\\]`, "i").test(issue.title)
+        || new RegExp(`^\\s*/${escaped}\\s*$`, "im").test(issue.body);
+}
+
+/** Номер задачи, к которой этот issue — правка («/justai #3» отдельной строкой), иначе null. */
+export function followUpTarget(issue: GitHubIssue, label: string): number | null {
+    const match = new RegExp(`^\\s*/${escapeRegExp(label)}\\s+#(\\d+)\\s*$`, "im").exec(issue.body);
+    return match ? Number(match[1]) : null;
+}
+
+/** Текст правки без служебных строк «/justai …». */
+export function stripCommands(body: string, label: string): string {
+    return body.replace(new RegExp(`^\\s*/${escapeRegExp(label)}\\b.*$`, "gim"), "").trim();
+}
+
+function escapeRegExp(text: string): string {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /**

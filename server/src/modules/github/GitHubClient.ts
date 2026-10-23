@@ -70,9 +70,15 @@ export class GitHubClient {
         return repo.private;
     }
 
-    public async listIssues(label: string): Promise<GitHubIssue[]> {
-        const items = await this.request<RawIssue[]>(`${this.base}/issues?state=open&labels=${encodeURIComponent(label)}&per_page=50&sort=created&direction=asc`);
+    /** Открытые issues (без label — все), старые первыми. */
+    public async listIssues(label?: string): Promise<GitHubIssue[]> {
+        const filter = label ? `&labels=${encodeURIComponent(label)}` : "";
+        const items = await this.request<RawIssue[]>(`${this.base}/issues?state=open${filter}&per_page=100&sort=created&direction=asc`);
         return items.map(toIssue);
+    }
+
+    public async closeIssue(number: number): Promise<void> {
+        await this.request(`${this.base}/issues/${number}`, { method: "PATCH", body: { state: "closed" } });
     }
 
     public async getIssue(number: number): Promise<GitHubIssue> {

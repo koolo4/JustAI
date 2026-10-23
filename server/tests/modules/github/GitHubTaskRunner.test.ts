@@ -18,7 +18,7 @@ import { AgentFileSystem } from "../../../src/modules/agent/tools/AgentFileSyste
 import { createFileTools } from "../../../src/modules/agent/tools/fileTools.js";
 import { ToolRegistry } from "../../../src/modules/agent/tools/ToolRegistry.js";
 import { BOT_MARKER, type GitHubClient, type GitHubComment, type GitHubIssue } from "../../../src/modules/github/GitHubClient.js";
-import { GitHubTaskRunner, LABELS, originMatches, taskPrompt } from "../../../src/modules/github/GitHubTaskRunner.js";
+import { followUpTarget, GitHubTaskRunner, isTask, LABELS, originMatches, stripCommands, taskPrompt } from "../../../src/modules/github/GitHubTaskRunner.js";
 
 const git = new GitService();
 
@@ -34,7 +34,10 @@ class FakeGitHub {
     public async currentUser() { return "me"; }
     public async isPrivate() { return this.isPrivateRepo; }
     public async defaultBranch() { return "main"; }
-    public async listIssues(label: string) { return this.issues.filter(issue => issue.labels.includes(label)); }
+    public closed: number[] = [];
+    public async listIssues(label?: string) { return this.issues.filter(issue => !this.closed.includes(issue.number) && (!label || issue.labels.includes(label))); }
+    public async getIssue(number: number) { return this.issues.find(issue => issue.number === number)!; }
+    public async closeIssue(number: number) { this.closed.push(number); }
     public async listComments(number: number) { return this.comments.get(number) ?? []; }
 
     public async comment(number: number, body: string, asBot = true) {
@@ -64,8 +67,8 @@ class FakeGitHub {
         return { number: pull.number, url: pull.url, head, state: "open" };
     }
 
-    public issue(number: number, title: string, author = "me"): GitHubIssue {
-        const issue = { number, title, body: "", author, labels: ["justai"], url: `https://github.com/me/project/issues/${number}`, isPullRequest: false };
+    public issue(number: number, title: string, author = "me", options: { body?: string; labels?: string[] } = {}): GitHubIssue {
+        const issue = { number, title, body: options.body ?? "", author, labels: options.labels ?? ["justai"], url: `https://github.com/me/project/issues/${number}`, isPullRequest: false };
         this.issues.push(issue);
         return issue;
     }
@@ -165,6 +168,43 @@ describe.skipIf(!git.available)("GitHubTaskRunner", () => {
         expect(github.pulls).toHaveLength(1);
         expect(github.comments.get(2)).toHaveLength(3);
     }, 60_000);
+
+    it("works for planners that can create issues but cannot label or comment", async () => {
+        // Без метки, но с маркером в описании; issue без маркера не трогается.
+        github.issue(10, "Unrelated question", "me", { labels: [] });
+        github.issue(11, "создай файл c.txt", "me", { labels: [], body: "Need a file.\n/justai" });
+
+        await runner.check();
+        expect(github.issues.find(item => item.number === 11)!.labels).toEqual(["justai", LABELS.review]);
+        expect(github.comments.get(10)).toBeUndefined();
+
+        // Правка отдельным issue: принимается к #11, служебный issue закрывается.
+        github.issue(12, "Доработка #11", "me", { labels: [], body: "/justai #11\nсоздай файл d.txt" });
+        await runner.check();
+
+        const files = run(remote, "ls-tree", "--name-only", "justai/issue-11");
+        expect(files).toContain("c.txt");
+        expect(files).toContain("d.txt");
+        expect(github.closed).toEqual([12]);
+        expect(github.comments.get(12)![0]!.body).toContain("правка к задаче #11");
+
+        // Повторно та же правка не применяется.
+        github.closed = [];
+        await runner.check();
+        expect(github.comments.get(11)).toHaveLength(2);
+    }, 60_000);
+
+    it("recognises task markers and follow-ups", () => {
+        const make = (title: string, body: string, labels: string[] = []) => ({ number: 1, title, body, author: "me", labels, url: "", isPullRequest: false });
+
+        expect(isTask(make("[JustAI] Add page", ""), "justai")).toBe(true);
+        expect(isTask(make("Add page", "details\n/justai\n"), "justai")).toBe(true);
+        expect(isTask(make("Add page", "", ["justai"]), "justai")).toBe(true);
+        expect(isTask(make("Add page", "see /justai docs"), "justai")).toBe(false);
+        expect(followUpTarget(make("Fix", "/justai #3\nmake it blue"), "justai")).toBe(3);
+        expect(followUpTarget(make("Fix", "/justai"), "justai")).toBeNull();
+        expect(stripCommands("/justai #3\nmake it blue", "justai")).toBe("make it blue");
+    });
 
     it("ignores tasks from other people, public repositories and dirty workspaces", async () => {
         github.issue(3, "создай файл evil.txt", "stranger");
