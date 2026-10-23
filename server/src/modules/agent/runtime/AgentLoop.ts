@@ -17,13 +17,15 @@ import {
     ModelOutputError,
     type ModelProvider,
     type ModelTurn,
+    type ToolSpec,
 } from "../providers/ModelProvider.js";
 import type { Authorizer } from "../permissions/PermissionService.js";
 import { ToolError, type Tool } from "../tools/Tool.js";
 import { toToolSpec } from "../tools/ToolRegistry.js";
 import { DELEGATE_TOOL } from "../tools/delegateTool.js";
 import { Budget, type BudgetLimits } from "./Budget.js";
-import { fitToContextWindow } from "./ContextWindow.js";
+import { applyCompaction, chooseCut, summarizeHistory, type Compaction } from "./Compactor.js";
+import { contextBudget, fitToContextWindow } from "./ContextWindow.js";
 import { formatVerificationFailure, type VerificationOutcome } from "./Verifier.js";
 
 const DEFAULT_VERIFY_ATTEMPTS = 3;
@@ -58,6 +60,10 @@ export interface AgentLoopOptions {
     maxVerifyAttempts?: number;
     /** Сохранить новое сообщение (вызывается для каждого сообщения по порядку). */
     onMessage(message: Message): Promise<void>;
+    /** Пересказ начала сессии из прошлых прогонов. */
+    compaction?: Compaction;
+    /** Сохранить новый пересказ. Без него старые ходы при нехватке окна просто выбрасываются. */
+    onCompaction?: (compaction: Compaction) => Promise<void>;
 }
 
 export type AgentLoopStatus = "completed" | "stopped" | "failed";
@@ -90,9 +96,12 @@ export class AgentLoop {
 
     private verifyAttempts = 0;
 
+    private compaction: Compaction | undefined;
+
     constructor(
         private readonly options: AgentLoopOptions,
     ) {
+        this.compaction = options.compaction;
         this.budget = new Budget(options.limits);
         this.toolsByName = new Map(options.tools.map(tool => [tool.name, tool]));
     }
@@ -284,17 +293,7 @@ export class AgentLoop {
 
     private async callModel(messages: Message[]): Promise<ModelTurn> {
         const tools = this.options.tools.map(toToolSpec);
-        const window = this.options.provider.contextWindow;
-
-        // Для моделей с маленьким окном отправляется ужатая копия истории; сохранённая не меняется.
-        const view = window
-            ? fitToContextWindow(messages, {
-                window: window.tokens,
-                reserveForOutput: window.reserveForOutput,
-                system: this.options.system,
-                tools,
-            }).messages
-            : messages;
+        const view = await this.contextView(messages, tools);
 
         const stream = this.options.provider.stream({
             system: this.options.system,
@@ -327,6 +326,60 @@ export class AgentLoop {
         }
 
         throw new ModelOutputError("The model stream ended without a final message.");
+    }
+
+    /**
+     * Для моделей с маленьким окном — ужатая копия истории; сохранённая не меняется.
+     * Если пришлось бы выбрасывать старые ходы, их сначала пересказывает модель (один раз, пересказ сохраняется).
+     * Пересказ не удался — выбрасываем с журналом шагов, как раньше.
+     */
+    private async contextView(messages: Message[], tools: ToolSpec[]): Promise<Message[]> {
+        const window = this.options.provider.contextWindow;
+
+        if (!window) {
+            return messages;
+        }
+
+        const options = {
+            window: window.tokens,
+            reserveForOutput: window.reserveForOutput,
+            system: this.options.system,
+            tools,
+        };
+
+        let base = applyCompaction(messages, this.compaction);
+        let fit = fitToContextWindow(base, options);
+
+        if (fit.dropped > 0 && this.options.onCompaction) {
+            try {
+                const budget = contextBudget(options);
+                const cut = chooseCut(base, Math.floor(budget / 2));
+
+                if (cut > 1) {
+                    const summary = await summarizeHistory(
+                        this.options.provider,
+                        base.slice(1, cut),
+                        this.compaction?.text,
+                        this.options.signal,
+                    );
+
+                    this.budget.record(summary.usage);
+                    this.compaction = { afterId: base[cut - 1]!.id, text: summary.text };
+                    await this.options.onCompaction(this.compaction);
+
+                    base = applyCompaction(messages, this.compaction);
+                    fit = fitToContextWindow(base, options);
+                }
+            }
+            catch (error) {
+                if (this.options.signal.aborted) {
+                    throw error;
+                }
+                // Пересказ — улучшение, не требование: остаётся обычное ужатие.
+            }
+        }
+
+        return fit.messages;
     }
 
     /**

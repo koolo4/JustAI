@@ -441,6 +441,11 @@ export class SessionManager {
                     : {}),
                 ...this.verifyOption(summary, profile.tools),
                 onMessage: message => this.addMessage(session, message),
+                ...(session.compaction ? { compaction: session.compaction } : {}),
+                onCompaction: async compaction => {
+                    session.compaction = compaction;
+                    await this.deps.store.appendCompaction(summary.id, compaction);
+                },
             });
 
             const result = await loop.run(session.messages);

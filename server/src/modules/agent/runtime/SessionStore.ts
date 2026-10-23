@@ -3,17 +3,22 @@ import path from "node:path";
 
 import type { Message, SessionSummary } from "@justai/shared";
 
+import type { Compaction } from "./Compactor.js";
+
 export interface StoredSession {
     summary: SessionSummary;
     /** Системный промпт, зафиксированный при создании сессии. */
     system: string;
     messages: Message[];
+    /** Последний пересказ начала сессии (для моделей с маленьким окном). */
+    compaction?: Compaction;
 }
 
 type Record =
     | { kind: "header"; summary: SessionSummary; system: string }
     | { kind: "message"; message: Message }
-    | { kind: "summary"; summary: SessionSummary };
+    | { kind: "summary"; summary: SessionSummary }
+    | { kind: "compaction"; compaction: Compaction };
 
 const ID_PATTERN = /^[a-zA-Z0-9-]+$/;
 
@@ -41,6 +46,10 @@ export class SessionStore {
 
     public appendMessage(id: string, message: Message): Promise<void> {
         return this.append(id, { kind: "message", message });
+    }
+
+    public appendCompaction(id: string, compaction: Compaction): Promise<void> {
+        return this.append(id, { kind: "compaction", compaction });
     }
 
     public updateSummary(summary: SessionSummary): Promise<void> {
@@ -129,6 +138,9 @@ function fold(text: string): StoredSession | null {
         }
         else if (session && record.kind === "summary") {
             session.summary = record.summary;
+        }
+        else if (session && record.kind === "compaction") {
+            session.compaction = record.compaction;
         }
     }
 

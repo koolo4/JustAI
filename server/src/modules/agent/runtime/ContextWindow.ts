@@ -25,6 +25,8 @@ export interface CompactionResult {
     /** Что было сделано (для логов/UI); пусто, если ничего. */
     actions: string[];
     estimatedTokens: number;
+    /** Сколько старых сообщений выброшено (0 — только очистка или ничего). */
+    dropped: number;
 }
 
 export function estimateTokens(text: string): number {
@@ -62,16 +64,22 @@ export function messageTokens(message: Message): number {
  * 1) старые большие результаты инструментов заменяются пометкой;
  * 2) если не хватает — выбрасываются самые старые ходы (первое сообщение с задачей остаётся).
  */
+/** Сколько токенов истории помещается в окно после системного промпта, инструментов и резерва под ответ. */
+export function contextBudget(options: ContextWindowOptions): number {
+    const overhead = estimateTokens(options.system) + estimateTokens(JSON.stringify(options.tools));
+    return Math.floor((options.window - options.reserveForOutput - overhead) * 0.9);
+}
+
 export function fitToContextWindow(messages: Message[], options: ContextWindowOptions): CompactionResult {
     const overhead = estimateTokens(options.system) + estimateTokens(JSON.stringify(options.tools));
-    const budget = Math.floor((options.window - options.reserveForOutput - overhead) * 0.9);
+    const budget = contextBudget(options);
 
     const sizes = messages.map(messageTokens);
     let total = sizes.reduce((sum, size) => sum + size, 0);
     const actions: string[] = [];
 
     if (total <= budget) {
-        return { messages, actions, estimatedTokens: total + overhead };
+        return { messages, actions, estimatedTokens: total + overhead, dropped: 0 };
     }
 
     // 1. Очистка старых результатов инструментов.
@@ -106,7 +114,7 @@ export function fitToContextWindow(messages: Message[], options: ContextWindowOp
     }
 
     if (total <= budget) {
-        return { messages: result, actions, estimatedTokens: total + overhead };
+        return { messages: result, actions, estimatedTokens: total + overhead, dropped: 0 };
     }
 
     // 2. Удаление самых старых ходов. Обрезаем перед сообщением ассистента,
@@ -130,7 +138,7 @@ export function fitToContextWindow(messages: Message[], options: ContextWindowOp
     }
 
     if (cut <= 1) {
-        return { messages: result, actions, estimatedTokens: total + overhead };
+        return { messages: result, actions, estimatedTokens: total + overhead, dropped: 0 };
     }
 
     const removed = cut - 1;
@@ -155,6 +163,7 @@ export function fitToContextWindow(messages: Message[], options: ContextWindowOp
     return {
         messages: compacted,
         actions,
+        dropped: removed,
         estimatedTokens: compacted.reduce((sum, message) => sum + messageTokens(message), 0) + overhead,
     };
 }
