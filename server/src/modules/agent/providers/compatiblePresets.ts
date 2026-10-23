@@ -110,6 +110,17 @@ export const COMPATIBLE_PRESETS: CompatiblePreset[] = [
         local: false,
         contextTokens: 128_000,
     },
+    // Любой OpenAI-совместимый сервер: например, ретранслятор GPT (LiteLLM) на соседнем ПК в локальной сети.
+    {
+        id: "custom",
+        label: "Свой сервер (OpenAI-совместимый)",
+        prefix: "CUSTOM",
+        baseURL: "",
+        keyEnv: ["CUSTOM_API_KEY"],
+        local: false,
+        keyOptional: true,
+        contextTokens: 128_000,
+    },
     reservePreset(1),
     reservePreset(2),
     reservePreset(3),
