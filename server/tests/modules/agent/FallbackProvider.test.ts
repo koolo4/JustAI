@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { FallbackProvider, isExhausted } from "../../../src/modules/agent/providers/FallbackProvider.js";
-import type { ModelProvider, ModelRequest, ModelStreamEvent } from "../../../src/modules/agent/providers/ModelProvider.js";
+import { ModelOutputError, type ModelProvider, type ModelRequest, type ModelStreamEvent } from "../../../src/modules/agent/providers/ModelProvider.js";
 import { ProviderRegistry } from "../../../src/modules/agent/providers/ProviderRegistry.js";
 
 class HttpError extends Error {
@@ -111,8 +111,22 @@ describe("FallbackProvider", () => {
             reserves: [() => reserve],
             cooldownMs: 1000,
         });
-        await expect(answer(midAnswer)).rejects.toThrow("limit");
+        // Посреди ответа: ошибка формата (цикл агента повторит шаг), а повтор уже идёт к резерву.
+        await expect(answer(midAnswer)).rejects.toBeInstanceOf(ModelOutputError);
         expect(reserve.calls).toBe(0);
+        expect(await answer(midAnswer)).toBe("reserve1");
+    });
+
+    it("switches on timeouts and server failures too", async () => {
+        const provider = new FallbackProvider({
+            primary: fake("openrouter", { fail: new Error("Upstream idle timeout exceeded") }),
+            reserves: [() => fake("reserve1")],
+            cooldownMs: 1000,
+        });
+
+        expect(await answer(provider)).toBe("reserve1");
+        expect(isExhausted(new HttpError(502, "Bad gateway"))).toBe(true);
+        expect(isExhausted(new HttpError(504, "Gateway timeout"))).toBe(true);
     });
 
     it("recognises exhausted-resource errors", () => {

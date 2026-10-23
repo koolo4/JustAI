@@ -1,4 +1,4 @@
-import type { ModelProvider, ModelRequest, ModelStreamEvent } from "./ModelProvider.js";
+import { ModelOutputError, type ModelProvider, type ModelRequest, type ModelStreamEvent } from "./ModelProvider.js";
 
 export interface FallbackOptions {
     primary: ModelProvider;
@@ -67,17 +67,25 @@ export class FallbackProvider implements ModelProvider {
                 }
                 return;
             } catch (error) {
-                // Посреди ответа переключаться нельзя: часть текста уже показана.
                 const next = this.active + 1;
 
-                if (emitted || request.signal.aborted || !isExhausted(error) || next >= this.chain.length) {
+                if (request.signal.aborted || !isExhausted(error) || next >= this.chain.length) {
                     throw error;
                 }
 
                 const from = this.current;
+                const reason = error instanceof Error ? error.message : String(error);
                 this.chain[this.active]!.blockedUntil = this.now() + this.options.cooldownMs;
+
+                // Посреди ответа продолжить у другого провайдера нельзя (часть текста уже показана):
+                // провайдер помечен недоступным, а цикл агента повторит шаг — уже у следующего.
+                if (emitted) {
+                    this.options.onSwitch?.(from, this.provider(next), reason);
+                    throw new ModelOutputError(`The provider dropped the response (${reason}); retrying with the next provider.`, { cause: error });
+                }
+
                 this.active = next;
-                this.options.onSwitch?.(from, this.current, error instanceof Error ? error.message : String(error));
+                this.options.onSwitch?.(from, this.current, reason);
             }
         }
     }
@@ -90,10 +98,11 @@ export class FallbackProvider implements ModelProvider {
     }
 }
 
-const EXHAUSTED_STATUS = new Set([402, 413, 429, 503, 529]);
-const EXHAUSTED_TEXT = /quota|rate.?limit|insufficient|credit|tokens per (minute|day)|requests per|overloaded|too many requests/i;
+/** Лимиты (402, 413, 429) и недоступность сервера: тайм-аут (408, 504), сбой (500, 502, 503, 529). */
+const EXHAUSTED_STATUS = new Set([402, 408, 413, 429, 500, 502, 503, 504, 529]);
+const EXHAUSTED_TEXT = /quota|rate.?limit|insufficient|credit|tokens per (minute|day)|requests per|overloaded|too many requests|time.?out|timed out|upstream|unavailable|bad gateway|econnreset|econnrefused|socket hang up|could not read the model stream/i;
 
-/** Ошибка означает «у этого провайдера сейчас нет ресурса», а не «запрос плохой». */
+/** Ошибка означает «этот провайдер сейчас не может ответить» (лимит, сбой, тайм-аут), а не «запрос плохой». */
 export function isExhausted(error: unknown): boolean {
     if (!(error instanceof Error)) {
         return false;
