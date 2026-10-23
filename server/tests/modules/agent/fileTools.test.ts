@@ -126,6 +126,46 @@ describe("file tools", () => {
             .rejects.toThrow("must be a real newline");
     });
 
+    it("applies an edit whose old_string lost line breaks and indentation (collapsed HTML from a small model)", async () => {
+        await workspace.write("index.html", [
+            "<div class=\"modes-grid\">",
+            "    <button class=\"mode-card\" data-mode=\"build\">",
+            "        <div class=\"mode-card__title\">Угадай сборку</div>",
+            "        <div class=\"mode-card и\" data-mode=\"build\">Определи героя по набору предметов</div>",
+            "    </button>",
+            "</div>",
+            "",
+        ].join("\n"));
+        await run("read_file", { path: "index.html" });
+
+        const result = await run("edit_file", {
+            path: "index.html",
+            edits: [{
+                old_string: "<div class=\"mode-card__title\">Угадай сборку</div><div class=\"mode-card и\" data-mode=\"build\">Определи героя по набору предметов</div>",
+                new_string: "<div class=\"mode-card__title\">Угадай сборку</div>\n<div class=\"mode-card__description\">Определи героя по набору предметов</div>",
+            }],
+        });
+
+        expect(result).toContain("ignoring whitespace");
+        expect(await disk("index.html")).toBe([
+            "<div class=\"modes-grid\">",
+            "    <button class=\"mode-card\" data-mode=\"build\">",
+            "        <div class=\"mode-card__title\">Угадай сборку</div>",
+            "        <div class=\"mode-card__description\">Определи героя по набору предметов</div>",
+            "    </button>",
+            "</div>",
+            "",
+        ].join("\n"));
+    });
+
+    it("does not guess when the whitespace-insensitive match is ambiguous", async () => {
+        await workspace.write("twice.txt", "a  b\nc\na b\n");
+        await run("read_file", { path: "twice.txt" });
+
+        await expect(run("edit_file", { path: "twice.txt", edits: [{ old_string: "a\nb", new_string: "x" }] }))
+            .rejects.toThrow(/was not found/);
+    });
+
     it("refuses ambiguous edits unless replace_all, keeps $ literal", async () => {
         await run("read_file", { path: "src/a.ts" });
 

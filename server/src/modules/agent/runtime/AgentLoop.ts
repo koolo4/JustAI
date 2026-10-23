@@ -105,6 +105,10 @@ export class AgentLoop {
 
     private planNudges = 0;
 
+    private lastFailedCall: string | undefined;
+
+    private repeatedFailures = 0;
+
     constructor(
         private readonly options: AgentLoopOptions,
     ) {
@@ -279,7 +283,22 @@ export class AgentLoop {
                 ))
                 : await this.executeTools(toolUses);
 
-            await add(createMessage("user", results));
+            // Один и тот же неудачный вызов подряд — модель зациклилась: подсказать, а потом остановить.
+            const repeats = this.trackRepeatedFailure(toolUses, results);
+
+            if (repeats >= MAX_REPEATED_FAILURES) {
+                await add(createMessage("user", results));
+                return this.result("failed", `The agent repeated the same failing ${toolUses[0]!.name} call ${repeats} times and was stopped.`);
+            }
+
+            const nudge: ContentBlock[] = repeats > 0 && repeats % REPEAT_HINT_EVERY === 0
+                ? [{
+                    type: "text",
+                    text: `[JustAI] You have made the same failing ${toolUses[0]!.name} call ${repeats} times in a row. Repeating it will not work. Change the approach: read the exact lines again and copy them with their line breaks and indentation, make a smaller edit (one line or one element), or rewrite the whole file with write_file.`,
+                }]
+                : [];
+
+            await add(createMessage("user", [...results, ...nudge]));
         }
     }
 
@@ -455,6 +474,23 @@ export class AgentLoop {
         return results;
     }
 
+    /** Сколько раз подряд повторяется один и тот же неудачный вызов (0 — последний шаг не такой). */
+    private trackRepeatedFailure(toolUses: ToolUseBlock[], results: ToolResultBlock[]): number {
+        const single = toolUses.length === 1 ? toolUses[0]! : undefined;
+        const failed = single && results.find(result => result.toolUseId === single.id)?.isError === true;
+
+        if (!single || !failed) {
+            this.lastFailedCall = undefined;
+            this.repeatedFailures = 0;
+            return 0;
+        }
+
+        const key = `${single.name}:${JSON.stringify(single.input)}`;
+        this.repeatedFailures = key === this.lastFailedCall ? this.repeatedFailures + 1 : 1;
+        this.lastFailedCall = key;
+        return this.repeatedFailures;
+    }
+
     /**
      * Инструмент по имени. Некоторые модели (gpt-oss) добавляют пространство имён:
      * «repo_browser.list_dir», «functions.read_file» — берём часть после последней точки/двоеточия.
@@ -615,6 +651,10 @@ export function asksToBuild(text: string): boolean {
     return /(сдела|созда|напиши|написать|реализу|добав|нужен|нужна|нужно|сверста|собери|запили|build|make|create|implement|write|add)\w*/.test(lower)
         && /(сайт|страниц|игр|приложени|бот|скрипт|сервис|функци|компонент|файл|код|лендинг|site|page|game|app|script|bot|service|feature|component|file|code)/.test(lower);
 }
+
+/** Подсказка о зацикливании — на каждый 3-й одинаковый неудачный вызов; остановка — на 6-й. */
+const REPEAT_HINT_EVERY = 3;
+const MAX_REPEATED_FAILURES = 6;
 
 /** Сколько раз за прогон напоминать о невыполненных пунктах плана. */
 const MAX_PLAN_NUDGES = 2;

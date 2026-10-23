@@ -128,6 +128,23 @@ export function createFileTools(
                     }
                 }
 
+                // Ещё чаще: модель «склеила» строки или поменяла отступы. Сопоставляем без учёта пробелов,
+                // но только однозначно (одно место или replace_all).
+                if (occurrences === 0) {
+                    const loose = looseMatches(text, oldText);
+
+                    if (loose.length === 1 || (loose.length > 1 && edit.replace_all)) {
+                        for (const match of [...loose].reverse()) {
+                            const replacement = reindent(newText, indentAt(text, match.index));
+                            text = text.slice(0, match.index) + replacement + text.slice(match.index + match.length);
+                        }
+
+                        replacements += loose.length;
+                        notes.push(`${label}old_string matched only when ignoring whitespace and line breaks; it was applied there. Copy text exactly, with its line breaks, next time.`);
+                        return;
+                    }
+                }
+
                 if (occurrences === 0) {
                     const hint = /\\[nt]/.test(edit.old_string)
                         ? " Note: old_string contains the two characters \\n; a line break must be a real newline (\"\\n\" in JSON)."
@@ -174,4 +191,49 @@ export function createFileTools(
 
 function unescapeWhitespace(text: string): string {
     return text.replace(/\\n/g, "\n").replace(/\\t/g, "\t");
+}
+
+/**
+ * Места, где old_string совпадает без учёта пробелов: любая последовательность пробельных символов
+ * равна любой другой, а между соседними тегами («></div><div») пробелы допускаются.
+ */
+export function looseMatches(text: string, oldText: string): Array<{ index: number; length: number }> {
+    const tokens = oldText.trim().split(/\s+/).filter(Boolean);
+
+    if (tokens.length === 0 || oldText.trim().length < 8) {
+        return [];
+    }
+
+    const pattern = tokens
+        .map(token => token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/></g, ">\\s*<"))
+        .join("\\s+");
+
+    const matches: Array<{ index: number; length: number }> = [];
+
+    for (const match of text.matchAll(new RegExp(pattern, "g"))) {
+        matches.push({ index: match.index, length: match[0].length });
+    }
+
+    return matches;
+}
+
+/** Отступ строки, в которой начинается совпадение (если перед ним на строке только пробелы). */
+export function indentAt(text: string, index: number): string {
+    const lineStart = text.lastIndexOf("\n", index - 1) + 1;
+    const before = text.slice(lineStart, index);
+    return /^[ \t]*$/.test(before) ? before : "";
+}
+
+/** Строки вставки без собственного отступа получают отступ места вставки (первая строка уже стоит на нём). */
+export function reindent(newText: string, indent: string): string {
+    if (!indent || !newText.includes("\n")) {
+        return newText;
+    }
+
+    const lines = newText.split("\n");
+    const hasOwnIndent = lines.slice(1).some(line => /^[ \t]+\S/.test(line));
+
+    return hasOwnIndent
+        ? newText
+        : [lines[0], ...lines.slice(1).map(line => line.trim() ? indent + line : line)].join("\n");
 }

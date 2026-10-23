@@ -197,6 +197,20 @@ describe("AgentLoop", () => {
         expect(stubborn.provider.requests).toHaveLength(4);
     });
 
+    it("nudges a model that repeats the same failing call, then stops it", async () => {
+        const failing = { toolCalls: [{ name: "fail", input: {} }] };
+        const { loop, saved, provider } = setup([failing, failing, failing, failing, failing, failing, { text: "never reached" }]);
+
+        const result = await loop.run([createMessage("user", [{ type: "text", text: "go" }])]);
+
+        expect(result).toMatchObject({ status: "failed", reason: expect.stringContaining("repeated the same failing fail call 6 times") });
+        expect(provider.requests).toHaveLength(6);
+
+        // На третьем повторе к результату приложена подсказка сменить подход.
+        const third = saved.filter(message => message.role === "user")[2]!;
+        expect(third.content.at(-1)).toMatchObject({ type: "text", text: expect.stringContaining("same failing fail call 3 times") });
+    });
+
     it("does not treat an empty reply as finished", async () => {
         const { loop, user, saved, provider } = setup([
             { text: "" },
