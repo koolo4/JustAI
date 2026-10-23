@@ -24,9 +24,9 @@ export interface CompatiblePreset {
 }
 
 /** Резервные «эксперты»: любой OpenAI-совместимый сервер, задаётся целиком через env. */
-export const RESERVE_IDS = ["reserve1", "reserve2"] as const;
+export const RESERVE_IDS = ["reserve1", "reserve2", "reserve3"] as const;
 
-function reservePreset(n: 1 | 2): CompatiblePreset {
+function reservePreset(n: 1 | 2 | 3): CompatiblePreset {
     return {
         id: `reserve${n}`,
         label: `Резерв ${n}`,
@@ -112,6 +112,7 @@ export const COMPATIBLE_PRESETS: CompatiblePreset[] = [
     },
     reservePreset(1),
     reservePreset(2),
+    reservePreset(3),
 ];
 
 export function findPreset(id: string): CompatiblePreset | undefined {
