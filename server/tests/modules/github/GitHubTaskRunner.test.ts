@@ -158,6 +158,8 @@ describe.skipIf(!git.available)("GitHubTaskRunner", () => {
         expect(run(root, "rev-parse", "--abbrev-ref", "HEAD").trim()).toBe("main");
         expect(existsSync(path.join(root, "notes", "todo.md"))).toBe(false);
         expect(runner.getStatus().tasks).toEqual([{ issue: 1, status: "review", branch: "justai/issue-1", pullRequest: "https://github.com/me/project/pull/100" }]);
+        // Сессию моста видно в списке сессий по понятному названию.
+        expect((await sessions.list()).map(session => session.title)).toEqual(["GitHub #1: создай файл notes/todo.md"]);
     }, 60_000);
 
     it("continues on the same branch when the owner comments, and ignores its own reports", async () => {

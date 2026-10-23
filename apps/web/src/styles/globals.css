@@ -655,6 +655,40 @@ button {
 .setting-hint code { word-break: break-all; }
 .error-text { color: #f56565; font-size: 13px; }
 
+.github-activity {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    margin: 6px 0;
+    padding: 8px 10px;
+    font-size: 13px;
+    background: #14212e;
+    border: 1px solid #23415c;
+    border-radius: 8px;
+}
+
+.github-activity.error {
+    color: #f6c1c1;
+    background: #2a1618;
+    border-color: #5c2328;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.github-activity__pulse {
+    width: 8px;
+    height: 8px;
+    background: #4fd1c5;
+    border-radius: 50%;
+    animation: github-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes github-pulse {
+    50% { opacity: .3; }
+}
+
 .problems-panel {
     display: flex;
     flex-direction: column;

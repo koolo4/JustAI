@@ -296,6 +296,14 @@ export class SessionManager {
         await this.deps.snapshots.discard(id);
     }
 
+    /** Переименовать сессию (например, «GitHub #5: …» для задач моста). */
+    public async setTitle(id: string, title: string): Promise<SessionSummary> {
+        const session = await this.load(id);
+        session.summary.title = title.length > TITLE_LENGTH ? `${title.slice(0, TITLE_LENGTH)}…` : title;
+        await this.deps.store.updateSummary(session.summary);
+        return session.summary;
+    }
+
     /**
      * Удалить сессию: файл истории и её точку отката (изменения в файлах проекта остаются как есть).
      */

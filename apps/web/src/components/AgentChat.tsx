@@ -18,6 +18,7 @@ import type {
 import { useIDEContext } from "../context/useIDEContext";
 import { useAgentSession, type ToolProgress } from "../hooks/useAgentSession";
 import { deleteSession, fetchProfiles, fetchProviders, fetchSessions } from "../services/agentApi";
+import { GitHubActivity } from "./GitHubActivity";
 import { IntegrationCard } from "./IntegrationCard";
 import { MentionTextarea } from "./MentionTextarea";
 import { SessionChanges } from "./SessionChanges";
@@ -142,6 +143,15 @@ export function AgentChat({ onReview }: { onReview?: (request: ReviewRequest) =>
                         </button>
                     </div>
                 </div>
+
+                <GitHubActivity
+                    activeSessionId={agent.session?.id}
+                    onWatch={id => {
+                        void agent.open(id);
+                        setShowSessions(false);
+                        fetchSessions().then(setSessions).catch(() => undefined);
+                    }}
+                />
 
                 {showSessions && (
                     <SessionList

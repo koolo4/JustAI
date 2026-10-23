@@ -35,6 +35,8 @@ export interface GitHubRunnerStatus {
     repo: string;
     state: "idle" | "working" | "error" | "stopped";
     currentIssue?: number;
+    /** Сессия, в которой сейчас работает исполнитель (её можно открыть в интерфейсе и смотреть шаги). */
+    currentSessionId?: string;
     lastCheck?: string;
     lastError?: string;
     /** Задачи выполняются, но что-то второстепенное не работает (например, нет прав на метки). */
@@ -237,7 +239,10 @@ export class GitHubTaskRunner {
                     mode: "full-auto",
                 });
                 task.sessionId = created.id;
+                await sessions.setTitle(created.id, `GitHub #${issue.number}: ${cleanTitle(issue.title, config.label)}`);
             }
+
+            this.status = { ...this.status, currentSessionId: task.sessionId };
 
             permissions.setUnattended(task.sessionId, true);
             await sessions.send(task.sessionId, { text: feedback.length ? feedbackPrompt(issue, feedback, branch) : taskPrompt(issue, branch, config.label) });
@@ -281,7 +286,7 @@ export class GitHubTaskRunner {
             await client.removeLabel(issue.number, LABELS.working).catch(() => undefined);
             await this.git(["checkout", base]).catch(() => undefined);
             await this.save(state);
-            this.status = { ...this.status, currentIssue: undefined, ...(this.status.state === "working" ? { state: "idle" as const } : {}) };
+            this.status = { ...this.status, currentIssue: undefined, currentSessionId: undefined, ...(this.status.state === "working" ? { state: "idle" as const } : {}) };
         }
     }
 
