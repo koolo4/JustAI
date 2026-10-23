@@ -18,6 +18,7 @@ npm install
 npm run typecheck                    # shared + server (src и tests) + web
 npm test                             # Vitest (server)
 npm run build
+npm run eval -- --provider ollama    # замеры агента на задачах-эталонах (server/eval)
 npm run dev:server                   # сервер на http://127.0.0.1:4302
 npm run dev:web                      # фронт на http://localhost:3000
 ```

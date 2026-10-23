@@ -12,6 +12,7 @@
     "build": "npm run build -w @justai/shared && npm run build -w @justai/server && npm run build -w @justai/web",
     "typecheck": "npm run build:shared && npm run typecheck -w @justai/server && npm run typecheck -w @justai/web",
     "test": "npm run build:shared && npm test -w @justai/server && npm test -w @justai/web",
+    "eval": "npm run build:shared && npm run eval -w @justai/server --",
     "dev:server": "npm run build:shared && npm run dev -w @justai/server",
     "dev:web": "npm run build:shared && npm run dev -w @justai/web"
   }

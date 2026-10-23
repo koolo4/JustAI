@@ -30,3 +30,6 @@ Thumbs.db
 
 # Generated repository dumps
 repomix-output.txt
+
+# Результаты npm run eval
+server/eval/results/

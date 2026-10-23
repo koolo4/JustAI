@@ -11,6 +11,7 @@
     "include": [
         "src",
         "tests",
+        "eval",
         "vitest.config.ts"
     ]
 }
