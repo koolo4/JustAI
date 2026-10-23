@@ -19,6 +19,7 @@ import { useIDEContext } from "../context/useIDEContext";
 import { useAgentSession, type ToolProgress } from "../hooks/useAgentSession";
 import { fetchProfiles, fetchProviders, fetchSessions } from "../services/agentApi";
 import { IntegrationCard } from "./IntegrationCard";
+import { MentionTextarea } from "./MentionTextarea";
 import { SessionChanges } from "./SessionChanges";
 import { SessionList } from "./SessionList";
 
@@ -339,12 +340,11 @@ export function AgentChat({ onReview }: { onReview?: (request: ReviewRequest) =>
                     </div>
                 )}
 
-                <textarea
-                    rows={4}
+                <MentionTextarea
                     value={prompt}
-                    onChange={event => setPrompt(event.target.value)}
+                    onChange={setPrompt}
                     onKeyDown={handleKeyDown}
-                    placeholder="Например: прочитай README.md и объясни проект"
+                    placeholder="Например: объясни @README.md (через @ — файлы проекта)"
                 />
 
                 {running ? (

@@ -35,6 +35,7 @@ import { formatExecutorResult, type ExecutorRunner } from "./ExecutorRunner.js";
 import type { VerificationOutcome, Verifier } from "./Verifier.js";
 import type { ToolRegistry } from "../tools/ToolRegistry.js";
 import { AgentLoop, createMessage } from "./AgentLoop.js";
+import { expandMentions } from "./Mentions.js";
 import type { BudgetLimits } from "./Budget.js";
 import type { SessionStore, StoredSession } from "./SessionStore.js";
 
@@ -185,7 +186,8 @@ export class SessionManager {
                 ? `${text}\n\n(The user has ${request.activeFile} open in the editor.)`
                 : text;
 
-            await this.addMessage(session, createMessage("user", [{ type: "text", text: prompt }]));
+            const attachments = await expandMentions(text, this.deps.workspaceRoot, this.deps.shouldIgnore);
+            await this.addMessage(session, createMessage("user", [{ type: "text", text: prompt }, ...attachments]));
 
             if (session.summary.title === "New session") {
                 session.summary.title = text.length > TITLE_LENGTH ? `${text.slice(0, TITLE_LENGTH)}…` : text;

@@ -599,6 +599,44 @@ button {
     resize: vertical;
 }
 
+.mention-input {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+}
+
+.mention-input textarea { width: 100%; box-sizing: border-box; }
+
+.mention-list {
+    position: absolute;
+    bottom: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    z-index: 15;
+    max-height: 240px;
+    margin: 0;
+    padding: 4px;
+    overflow: auto;
+    list-style: none;
+    background: #151a20;
+    border: 1px solid #2c3540;
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .4);
+}
+
+.mention-list li {
+    padding: 5px 8px;
+    overflow: hidden;
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.mention-list li.selected,
+.mention-list li:hover { background: #1f2a38; }
+
 .ai-input button {
     align-self: flex-end;
     padding: 8px 16px;
