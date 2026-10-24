@@ -11,6 +11,7 @@ import type { SettingsResponse, WorkspaceInfo } from '@justai/shared';
 
 import { Container } from './Container.js';
 import { createProject } from './ProjectCreator.js';
+import { parsePlan, resolveRefs } from '../modules/github/planImport.js';
 
 import { BadRequestError } from '../core/errors/BadRequestError.js';
 import { ErrorHandlerMiddleware } from '../core/middleware/ErrorHandlerMiddleware.js';
@@ -342,9 +343,43 @@ export class Server {
 
                 const label = this.container.githubTaskLabel;
                 const title = text.split('\n')[0]!.slice(0, 120);
-                const created = await client.createIssue(title, `${text}\n\n/${label}`, [label]);
+                // «/justai merge #5» и другие команды — служебный issue как есть, без метки задач.
+                const command = new RegExp(`^/${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(text);
+                const created = command
+                    ? await client.createIssue(`Команда: ${title}`, text, [])
+                    : await client.createIssue(title, `${text}\n\n/${label}`, [label]);
                 this.container.bridgeLog?.add({ kind: 'note', issue: created.number, url: created.url, text: `Вы поставили задачу: ${title}` });
                 res.json({ issue: created.number, url: created.url });
+            })().catch(next);
+        });
+
+        // План от планировщика с доступом только на чтение: блоки «### ISSUE» → issues по порядку,
+        // «@N» в зависимостях и командах — номера уже созданных issues этого плана.
+        this.app.post('/api/github/import', (req, res, next) => {
+            void (async () => {
+                const client = this.container.githubClient;
+                const text = typeof (req.body as { text?: unknown })?.text === 'string' ? (req.body as { text: string }).text : '';
+                const label = this.container.githubTaskLabel;
+
+                if (!client) throw new BadRequestError('GitHub is not configured: set the token and repository in Settings → GitHub.');
+
+                const blocks = parsePlan(text, label);
+
+                if (!blocks.length) throw new BadRequestError('No "### ISSUE" blocks found in the text.');
+                if (blocks.length > 50) throw new BadRequestError('At most 50 issues per plan.');
+
+                const created: Array<{ number: number; url: string; title: string }> = [];
+
+                for (const block of blocks) {
+                    const body = resolveRefs(block.body, created.map(item => item.number), label);
+                    const issue = block.command
+                        ? await client.createIssue(block.title, body, [])
+                        : await client.createIssue(block.title, `${body}\n\n/${label}`, [label]);
+                    created.push({ number: issue.number, url: issue.url, title: block.title });
+                }
+
+                this.container.bridgeLog?.add({ kind: 'note', text: `Вы вставили план: ${created.map(item => `#${item.number} ${item.title}`).join('; ')}` });
+                res.json({ created });
             })().catch(next);
         });
 

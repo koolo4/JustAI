@@ -148,7 +148,9 @@ export function BridgeFeed({ onOpenSession }: Props) {
     }, [shown.length, steps.length]);
 
     const autoTarget = runner?.currentIssue ?? (filter !== "all" ? filter : undefined);
-    const sendTo = target === "auto" ? autoTarget : target === "new" ? undefined : target;
+    // План от планировщика (блоки «### ISSUE») — создаются все issues сразу, а не одно сообщение.
+    const planBlocks = (text.match(/^\s*#{2,3}\s*ISSUE\b/gim) ?? []).length;
+    const sendTo = planBlocks ? undefined : target === "auto" ? autoTarget : target === "new" ? undefined : target;
 
     async function send() {
         const message = text.trim();
@@ -158,6 +160,18 @@ export function BridgeFeed({ onOpenSession }: Props) {
         setError("");
 
         try {
+            if (planBlocks) {
+                const response = await apiFetch("/github/import", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ text: message }),
+                });
+
+                if (!response.ok) throw new Error(await readApiError(response));
+                setText("");
+                return;
+            }
+
             const response = await apiFetch("/github/message", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -261,14 +275,16 @@ export function BridgeFeed({ onOpenSession }: Props) {
                 </div>
                 <textarea
                     value={text}
-                    placeholder={sendTo ? `Указание к задаче #${sendTo} (Ctrl+Enter — отправить)` : "Новая задача: первая строка — заголовок (Ctrl+Enter — отправить)"}
+                    placeholder={sendTo
+                        ? `Указание к задаче #${sendTo} (Ctrl+Enter — отправить)`
+                        : "Новая задача (первая строка — заголовок), команда «/justai …» или план планировщика с блоками «### ISSUE» (Ctrl+Enter — отправить)"}
                     onChange={event => setText(event.target.value)}
                     onKeyDown={handleKeyDown}
                     rows={3}
                 />
                 {error && <div className="error">{error}</div>}
                 <button className="send-button" disabled={!text.trim() || sending} onClick={() => void send()}>
-                    {sending ? "Отправляю…" : sendTo ? `Отправить в #${sendTo}` : "Поставить задачу"}
+                    {sending ? "Отправляю…" : planBlocks ? `Создать ${planBlocks} issues из плана` : sendTo ? `Отправить в #${sendTo}` : "Поставить задачу"}
                 </button>
             </div>
         </div>

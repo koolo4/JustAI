@@ -175,8 +175,9 @@ export function WorkspacePicker() {
                             )}
                             {repo.trim() && (
                                 <p className="muted workspace-hint">
-                                    Репозиторий сначала создайте на GitHub (лучше приватный, с README) и дайте к нему доступ токену
+                                    Репозиторий сначала создайте на GitHub (с README) и дайте к нему доступ токену
                                     (GitHub → Settings → Developer settings → Fine-grained tokens → ваш токен → Repository access).
+                                    Для открытого репозитория включите «Разрешить публичный репозиторий» в ⚙ Настройки → GitHub.
                                 </p>
                             )}
                             <div className="workspace-create-actions">
