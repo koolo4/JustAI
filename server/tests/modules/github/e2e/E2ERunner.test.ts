@@ -33,7 +33,8 @@ describe("e2e runner", () => {
     beforeAll(async () => {
         workspace = await createTempWorkspace();
         await workspace.write("index.html", PAGE);
-        await workspace.write("style.css", "body { background: #111; color: #eee; }");
+        // Заглавные через CSS: проверка текста должна смотреть на текст страницы («Раунд 1»), а не на «РАУНД 1».
+        await workspace.write("style.css", "body { background: #111; color: #eee; } #kicker { text-transform: uppercase; }");
         await workspace.write("ok.js", "console.log('SMOKE: PASS')");
         server = new StaticServer(workspace.root);
         base = await server.start();

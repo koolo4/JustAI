@@ -165,14 +165,16 @@ async function runStep(step: ScenarioStep, page: Page, log: ConsoleEntry[], scre
             const { selector, contains, equals, matches } = step.value;
             const locator = page.locator(selector).first();
             await locator.waitFor({ state: "attached", timeout: EXPECT_TIMEOUT_MS });
-            const actual = (await locator.innerText({ timeout: EXPECT_TIMEOUT_MS })).trim();
-
-            const ok = (contains === undefined || actual.includes(contains))
+            // Текст страницы (textContent), а не отображаемый: CSS text-transform: uppercase не должен ронять проверку.
+            // Отображаемый (innerText) тоже принимается — на случай текста из ::before или скрытых узлов.
+            const source = (await locator.textContent({ timeout: EXPECT_TIMEOUT_MS }) ?? "").replace(/\s+/g, " ").trim();
+            const shown = (await locator.innerText({ timeout: EXPECT_TIMEOUT_MS }).catch(() => source)).replace(/\s+/g, " ").trim();
+            const fits = (actual: string) => (contains === undefined || actual.includes(contains))
                 && (equals === undefined || actual === equals)
                 && (matches === undefined || new RegExp(matches).test(actual));
 
-            if (!ok) throw new Error(`text is "${clip(actual, 200)}"`);
-            return `"${clip(actual, 80)}"`;
+            if (!fits(source) && !fits(shown)) throw new Error(`text is "${clip(source, 200)}"`);
+            return `"${clip(source, 80)}"`;
         }
 
         case "expectVisible":
