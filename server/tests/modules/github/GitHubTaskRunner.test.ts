@@ -22,9 +22,10 @@ import { defineTool } from "../../../src/modules/agent/tools/Tool.js";
 import { createMessage } from "../../../src/modules/agent/runtime/AgentLoop.js";
 import { BOT_MARKER, GitHubError, type GitHubClient, type GitHubComment, type GitHubIssue } from "../../../src/modules/github/GitHubClient.js";
 import { ProcessManager } from "../../../src/infrastructure/process/ProcessManager.js";
+import { BrowserService } from "../../../src/infrastructure/browser/BrowserService.js";
 import { Verifier } from "../../../src/modules/agent/runtime/Verifier.js";
 import {
-    ARTIFACTS_BRANCH, checksReport, closeCommand, dependsOn, testEvidence, followUpCommand, followUpTarget, GitHubTaskRunner, isMergeCommand, isStopCommand, isTask, isTestTask, LABELS, originMatches,
+    appCommand, ARTIFACTS_BRANCH, checksReport, closeCommand, dependsOn, e2eCommand, testEvidence, followUpCommand, followUpTarget, GitHubTaskRunner, isMergeCommand, isStopCommand, isTask, isTestTask, LABELS, originMatches,
     progressReport, runCommentCommand, runIssueCommand, stripCommands, taskPrompt, testTarget, testVerdict,
 } from "../../../src/modules/github/GitHubTaskRunner.js";
 
@@ -617,6 +618,79 @@ describe.skipIf(!git.available)("GitHubTaskRunner", () => {
         expect(testEvidence([...work, finish("RESULT: PASS")], "check")).toEqual({ actions: 3, screenshots: 0, problem: null });
         expect(testEvidence([...work, finish("RESULT: FAIL")], "check").problem).toContain("RESULT: FAIL");
         expect(closeCommand({ number: 9, title: "x", body: "/justai close #2 #3, #9", author: "me", labels: [], url: "", isPullRequest: false }, "justai")).toEqual([2, 3]);
+    });
+
+    it("starts the app, runs e2e scenarios from issues and refuses to merge when tests/e2e fail", async (test) => {
+        const browser = new BrowserService();
+        const probe = await browser.page("probe").then(() => true, () => false);
+        await browser.close("probe");
+        if (!probe) test.skip();
+
+        await writeFile(path.join(root, "index.html"), "<!doctype html><title>Site</title><h1 id=\"title\">Привет</h1>");
+        const fs = await import("node:fs/promises");
+        await fs.mkdir(path.join(root, "tests", "e2e"), { recursive: true });
+        await writeFile(path.join(root, "tests", "e2e", "title.yml"), "name: title\nsteps:\n  - expectText: { selector: '#title', contains: 'Пока' }\n");
+        run(root, "add", "-A");
+        run(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "site");
+        run(root, "push", "origin", "HEAD:main");
+
+        const processes = new ProcessManager();
+        const bridge = new GitHubTaskRunner({
+            client: github as unknown as GitHubClient,
+            git,
+            sessions,
+            permissions: new PermissionService({ rulesFile: path.join(root, ".justai", "p8.json"), emit: () => undefined }),
+            workspaceRoot: root,
+            processes,
+            e2eBrowser: browser,
+            config: { label: "justai", allowedUsers: [], profile: "coder", provider: "mock", pollMs: 60_000, allowPublic: false, token: "" },
+        });
+
+        try {
+            // Приложение: встроенный статический сервер из отдельной рабочей копии.
+            github.issue(80, "App", "me", { labels: [], body: "/justai app start" });
+            await bridge.check();
+            expect(github.comments.get(80)![0]!.body).toContain("приложение запущено");
+            expect(github.comments.get(80)![0]!.body).toContain("built-in static server");
+            expect(existsSync(path.join(root, ".justai", "worktrees", "main", "index.html"))).toBe(true);
+
+            // Сценарий из issue: приложение переиспользуется, вердикт ставит программа.
+            github.issue(81, "E2E", "me", { labels: [], body: "Проверка\n/justai e2e\n```yaml\nname: hello\nsteps:\n  - expectText: { selector: '#title', contains: 'Привет' }\n  - screenshot: home\n```" });
+            await bridge.check();
+            const report = github.comments.get(81)![0]!.body;
+            expect(report).toContain("✅ PASS");
+            expect(report).toContain("![home (1280px)]");
+            expect(github.closed).toContain(81);
+
+            github.issue(82, "Stop", "me", { labels: [], body: "/justai app stop" });
+            await bridge.check();
+            expect(github.comments.get(82)![0]!.body).toContain("остановлено");
+            expect(existsSync(path.join(root, ".justai", "worktrees", "main"))).toBe(false);
+            // Основная папка проекта не тронута.
+            expect(run(root, "status", "--porcelain", "--", ".", ":(exclude).justai").trim()).toBe("");
+
+            // Слияние: проверки tests/e2e упали — PR не сливается.
+            github.issue(83, "создай файл z.txt");
+            await bridge.check();
+            github.comments.get(83)!.push({ id: 800, author: "me", body: "/justai merge", createdAt: "" });
+            await bridge.check();
+            expect(github.merged).toEqual([]);
+            expect(github.comments.get(83)!.some(comment => comment.body.includes("❌ FAIL") && comment.body.includes("title"))).toBe(true);
+            expect(github.comments.get(83)!.at(-1)!.body).toContain("сценарии `tests/e2e` не прошли");
+        }
+        finally {
+            await bridge.stop();
+            await browser.closeAll();
+        }
+    }, 180_000);
+
+    it("recognises app and e2e commands", () => {
+        expect(appCommand("/justai app start #5", "justai")).toEqual({ action: "start", target: 5 });
+        expect(appCommand("text\n/justai app logs\n", "justai")).toEqual({ action: "logs" });
+        expect(appCommand("/justai app restart", "justai")).toBeNull();
+        expect(e2eCommand("/justai e2e #7 all", "justai")).toEqual({ target: 7, files: "all" });
+        expect(e2eCommand("/justai e2e", "justai")).toEqual({});
+        expect(e2eCommand("/justai e2e tests/e2e/menu.yml", "justai")).toEqual({ files: "tests/e2e/menu.yml" });
     });
 
     it("recognises dependencies and merge commands", () => {

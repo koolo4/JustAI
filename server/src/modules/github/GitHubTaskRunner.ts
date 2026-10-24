@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readdir, readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 
 import type { Message, ToolResultBlock } from "@justai/shared";
@@ -9,6 +9,10 @@ import { classifyCommand } from "../agent/permissions/CommandClassifier.js";
 import type { PermissionService } from "../agent/permissions/PermissionService.js";
 import type { SessionManager } from "../agent/runtime/SessionManager.js";
 import type { VerificationOutcome, Verifier } from "../agent/runtime/Verifier.js";
+import type { BrowserService } from "../../infrastructure/browser/BrowserService.js";
+import { AppManager, type RunningApp } from "./e2e/AppManager.js";
+import { e2eReport, runScenario, type E2EResult } from "./e2e/E2ERunner.js";
+import { parseScenario, scenarioBlock, ScenarioError, type Scenario } from "./e2e/scenario.js";
 import { BOT_MARKER, GitHubError, type GitHubClient, type GitHubComment, type GitHubIssue } from "./GitHubClient.js";
 
 export const LABELS = {
@@ -44,6 +48,8 @@ export interface GitHubRunnerConfig {
     mergeMethod?: "squash" | "merge" | "rebase";
     /** task — не спать, пока идёт задача (по умолчанию); always — пока включён мост; off. */
     keepAwake?: "task" | "always" | "off";
+    /** Через сколько минут без обращений остановить приложение, запущенное «/justai app start» (по умолчанию 30). */
+    appIdleMinutes?: number;
 }
 
 export interface GitHubRunnerStatus {
@@ -132,6 +138,14 @@ export class GitHubTaskRunner {
     /** Прерывает проверки и команды при остановке моста. */
     private aborter = new AbortController();
     private releaseAlways?: () => void;
+    /** Приложение проекта для проверок («/justai app», «/justai e2e»). */
+    private readonly apps?: AppManager;
+
+    /** Причина отказа для разрушительной команды (как у агента), иначе null. */
+    private async dangerReason(command: string): Promise<string | null> {
+        const classification = classifyCommand(command, await this.deps.permissions.readRules());
+        return classification.level === "dangerous" ? classification.reason : null;
+    }
 
     /** Пока идёт работа — компьютер не засыпает (если не выключено настройкой). */
     private awake(): () => void {
@@ -152,12 +166,23 @@ export class GitHubTaskRunner {
             processes?: ProcessManager;
             /** Закрыть страницу браузера сессии после задачи. */
             browser?: { close(sessionId: string): Promise<unknown> };
+            /** Браузер для сценариев «/justai e2e» (выполняются без модели). */
+            e2eBrowser?: BrowserService;
             /** Не давать компьютеру уснуть, пока идёт работа (см. config.keepAwake). */
             keepAwake?: { acquire(): () => void };
             log?: (message: string) => void;
         },
     ) {
         this.stateFile = path.join(deps.workspaceRoot, ".justai", "github-state.json");
+        this.apps = deps.processes
+            ? new AppManager({
+                workspaceRoot: deps.workspaceRoot,
+                processes: deps.processes,
+                git: (args, withAuth) => this.git(args, withAuth),
+                isDangerous: command => this.dangerReason(command),
+                ...(deps.log ? { log: deps.log } : {}),
+            })
+            : undefined;
         this.status = { enabled: false, repo: deps.client.repo, state: "stopped", tasks: [] };
     }
 
@@ -183,6 +208,8 @@ export class GitHubTaskRunner {
         this.aborter.abort();
         this.releaseAlways?.();
         this.releaseAlways = undefined;
+        await this.running?.catch(() => undefined);
+        await this.apps?.stop().catch(() => undefined);
         await this.running?.catch(() => undefined);
     }
 
@@ -229,13 +256,51 @@ export class GitHubTaskRunner {
             if (latest) this.status = { ...this.status, lastSessionId: latest[1].sessionId, lastIssue: Number(latest[0]) };
         }
 
+        // Приложение, о котором забыли, не держит порт и память вечно.
+        const app = this.apps?.status();
+
+        if (app && Date.now() - app.lastUsed > (config.appIdleMinutes ?? 30) * 60_000) {
+            this.deps.log?.(`[github] app on ${app.branch} stopped after ${config.appIdleMinutes ?? 30} idle minutes`);
+            await this.apps!.stop();
+        }
+
+        // «/justai app …» и «/justai e2e …» отдельным issue: ответ в нём же, issue закрывается.
+        for (const issue of open) {
+            const appRequest = appCommand(issue.body, config.label);
+            const e2eRequest = appRequest ? null : e2eCommand(issue.body, config.label);
+
+            if ((!appRequest && !e2eRequest) || state.followUps?.includes(issue.number)) continue;
+
+            const target = appRequest?.target ?? e2eRequest?.target;
+            const task = target === undefined ? undefined : state.tasks[target];
+
+            if (target !== undefined && !task) {
+                await this.soft(client.comment(issue.number, `Задача #${target} не найдена в этом JustAI — команда не выполнена.`), "comments");
+            }
+            else if (appRequest) {
+                if (!(await this.appAction(issue.number, appRequest.action, task?.branch))) return;
+            }
+            else if (!(await this.runE2E(issue.number, task?.branch, issue.body, e2eRequest!.files))) {
+                return;
+            }
+
+            state.followUps = [...state.followUps ?? [], issue.number];
+            await this.save(state);
+            await this.soft(client.closeIssue(issue.number), "closing issues");
+            return;
+        }
+
         // «/justai status» (или ping) — живой ли мост и что в очереди: планировщик видит это, не дожидаясь задачи.
         for (const issue of open) {
             if (!isStatusCommand(issue, config.label) || state.followUps?.includes(issue.number)) continue;
 
             state.followUps = [...state.followUps ?? [], issue.number];
             await this.save(state);
-            await this.soft(client.comment(issue.number, statusReport(state, openNumbers, config.keepAwake ?? "task")), "comments");
+            await this.soft(client.comment(issue.number, [
+                statusReport(state, openNumbers, config.keepAwake ?? "task"),
+                "",
+                appStatusText(this.apps?.status() ?? null, config.appIdleMinutes ?? 30),
+            ].join("\n")), "comments");
             await this.soft(client.closeIssue(issue.number), "closing issues");
             return;
         }
@@ -345,7 +410,8 @@ export class GitHubTaskRunner {
         }
 
         const issues = open.filter(issue => followUpTarget(issue, config.label) === null && !runIssueCommand(issue, config.label)
-            && !closeCommand(issue, config.label) && !isStatusCommand(issue, config.label) && (isTask(issue, config.label) || isTestTask(issue, config.label)));
+            && !closeCommand(issue, config.label) && !isStatusCommand(issue, config.label)
+            && !appCommand(issue.body, config.label) && !e2eCommand(issue.body, config.label) && (isTask(issue, config.label) || isTestTask(issue, config.label)));
 
         for (const issue of issues) {
             const task = state.tasks[issue.number];
@@ -387,9 +453,17 @@ export class GitHubTaskRunner {
             for (const item of fresh) {
                 const command = runCommentCommand(item.body, config.label);
                 const merge = !command && isMergeCommand(item.body, config.label);
+                const appRequest = !command && !merge ? appCommand(item.body, config.label) : null;
+                const e2eRequest = !command && !merge && !appRequest ? e2eCommand(item.body, config.label) : null;
 
-                if (!command && !merge) continue;
-                if (!(command ? await this.runCommand(issue.number, task.branch, command) : await this.merge(issue.number, task, state, issue.number))) return;
+                if (!command && !merge && !appRequest && !e2eRequest) continue;
+
+                const done = command ? await this.runCommand(issue.number, task.branch, command)
+                    : merge ? await this.merge(issue.number, task, state, issue.number)
+                        : appRequest ? await this.appAction(issue.number, appRequest.action, task.branch)
+                            : await this.runE2E(issue.number, task.branch, item.body, e2eRequest!.files);
+
+                if (!done) return;
 
                 state.ran = [...state.ran ?? [], item.id].slice(-200);
                 await this.save(state);
@@ -400,7 +474,7 @@ export class GitHubTaskRunner {
             }
 
             const feedback = fresh.filter(item => !isStopCommand(item.body, config.label) && !runCommentCommand(item.body, config.label)
-                && !isMergeCommand(item.body, config.label));
+                && !isMergeCommand(item.body, config.label) && !appCommand(item.body, config.label) && !e2eCommand(item.body, config.label));
 
             if (feedback.length > 0) {
                 await this.run(issue, state, feedback, comments);
@@ -747,6 +821,16 @@ export class GitHubTaskRunner {
                 return true;
             }
 
+            // Сценарии проекта (tests/e2e) — тоже условие слияния: регрессии интерфейса не попадают в основную ветку.
+            if (this.apps && this.deps.e2eBrowser && (await loadScenarioFiles(this.deps.workspaceRoot, "all")).length > 0) {
+                const suite = await this.e2eSuite(replyTo, task.branch, "", undefined, "all");
+
+                if (!suite.passed) {
+                    await say(`❌ **JustAI**: не слито — сценарии \`${E2E_DIR}\` не прошли (отчёты выше). Попросите исправить, затем снова \`/${config.label} merge\`.`);
+                    return true;
+                }
+            }
+
             await client.mergePullRequest(pullNumber, `JustAI: ${cleanTitle((await client.getIssue(issueNumber)).title, config.label)} (#${issueNumber})`, config.mergeMethod ?? "squash");
 
             task.status = "merged";
@@ -807,21 +891,31 @@ export class GitHubTaskRunner {
 
     /** Скриншоты, которые агент снял за этот шаг, — в служебную ветку; в отчёт — картинки. */
     private async uploadScreenshots(issue: number, messages: Message[]): Promise<string[]> {
-        const images = collectImages(messages).slice(-MAX_SCREENSHOTS);
+        const lines = await this.uploadImages(issue, collectImages(messages).slice(-MAX_SCREENSHOTS).map((image, index) => ({
+            ...image,
+            name: String(index + 1),
+            alt: `скриншот ${index + 1}`,
+        })));
+
+        return lines.length ? ["", "**Скриншоты:**", ...lines] : [];
+    }
+
+    /** Картинки в служебную ветку justai-artifacts; в ответ — строки Markdown с подписью и картинкой. */
+    private async uploadImages(issue: number, images: Array<{ dataBase64: string; mediaType?: string; caption?: string; name: string; alt: string }>): Promise<string[]> {
         const stamp = new Date().toISOString().replace(/[:.]/g, "-");
         const lines: string[] = [];
 
-        for (const [index, image] of images.entries()) {
+        for (const image of images) {
             const extension = image.mediaType === "image/jpeg" ? "jpg" : "png";
 
             try {
                 const url = await this.deps.client.uploadFile(
                     ARTIFACTS_BRANCH,
-                    `screenshots/issue-${issue}/${stamp}-${index + 1}.${extension}`,
+                    `screenshots/issue-${issue}/${stamp}-${image.name.replace(/[^\w.-]+/g, "_")}.${extension}`,
                     image.dataBase64,
                     `JustAI: screenshot for #${issue}`,
                 );
-                lines.push(...(image.caption ? [`_${image.caption}_`] : []), `![скриншот ${index + 1}](${url})`);
+                lines.push(...(image.caption ? [`_${image.caption}_`] : []), `![${image.alt}](${url})`);
             }
             catch (error) {
                 await this.soft(Promise.reject(error), "screenshots", "Contents");
@@ -829,7 +923,195 @@ export class GitHubTaskRunner {
             }
         }
 
-        return lines.length ? ["", "**Скриншоты:**", ...lines] : [];
+        return lines;
+    }
+
+    /** Ветка задачи, если она ещё есть на GitHub, иначе основная (задачу слили — ветку удалили). */
+    private async liveBranch(branch: string | undefined): Promise<{ branch: string; note: string }> {
+        const base = await this.deps.client.defaultBranch();
+
+        if (!branch || branch === base) return { branch: base, note: "" };
+
+        const exists = (await this.git(["ls-remote", "--heads", "origin", branch], true).catch(() => "")).trim() !== "";
+        return exists ? { branch, note: "" } : { branch: base, note: `Ветки \`${branch}\` на GitHub нет (задача слита или в ней нет коммитов) — используется \`${base}\`.` };
+    }
+
+    /** «/justai app start|stop|status|logs»: приложение проекта на этом ПК для проверок планировщика. */
+    private async appAction(postTo: number, action: "start" | "stop" | "status" | "logs", branch: string | undefined): Promise<boolean> {
+        const { client, config } = this.deps;
+        const say = (text: string) => this.soft(client.comment(postTo, text), "comments");
+
+        if (!this.apps) {
+            await say("⚠️ **JustAI**: на этом ПК запуск приложений не поддерживается.");
+            return true;
+        }
+
+        if (action === "status") {
+            await say(appStatusText(this.apps.status(), config.appIdleMinutes ?? 30));
+            return true;
+        }
+
+        if (action === "logs") {
+            this.apps.touch();
+            await say(`📜 **JustAI**: вывод приложения\n${fenced(this.apps.logs())}`);
+            return true;
+        }
+
+        if (action === "stop") {
+            const was = this.apps.status();
+            await this.apps.stop();
+            await say(was ? `⏹ **JustAI**: приложение (\`${was.branch}\`) остановлено.` : "**JustAI**: приложение не запущено.");
+            return true;
+        }
+
+        const { branch: target, note } = await this.liveBranch(branch);
+        const release = this.awake();
+        this.status = { ...this.status, state: "working", currentIssue: postTo, lastError: undefined };
+
+        try {
+            const app = await this.apps.start(target);
+            await say([
+                `▶ **JustAI**: приложение запущено — ветка \`${app.branch}\` (коммит ${app.commit}), ${app.how}.`,
+                note,
+                `Адрес на ПК1: ${app.url}`,
+                `Остановится само через ${config.appIdleMinutes ?? 30} мин без обращений. Проверить: \`/${config.label} e2e\` со сценарием (приложение будет переиспользовано), вывод — \`/${config.label} app logs\`, остановить — \`/${config.label} app stop\`.`,
+            ].filter(Boolean).join("\n"));
+        }
+        catch (error) {
+            await say(`⚠️ **JustAI**: приложение не запустилось: ${clip(message(error), 2_000)}`);
+        }
+        finally {
+            release();
+            this.status = { ...this.status, currentIssue: undefined, ...(this.status.state === "working" ? { state: "idle" as const } : {}) };
+        }
+
+        return true;
+    }
+
+    /** «/justai e2e»: сценарий из блока ```yaml в тексте или файлы tests/e2e (all / путь). */
+    private async runE2E(postTo: number, branch: string | undefined, body: string, files: string | undefined): Promise<boolean> {
+        const { client, config } = this.deps;
+        const say = (text: string) => this.soft(client.comment(postTo, text), "comments");
+
+        if (!this.apps || !this.deps.e2eBrowser) {
+            await say("⚠️ **JustAI**: на этом ПК сценарные проверки не поддерживаются (нет браузера или процессов).");
+            return true;
+        }
+
+        const block = scenarioBlock(body);
+        let inline: Scenario | undefined;
+
+        if (!block && !files) {
+            await say(`⚠️ **JustAI**: нет сценария. Добавьте блок \`\`\`yaml со \`steps:\` (см. docs/github-bridge.md) или укажите файл: \`/${config.label} e2e tests/e2e/menu.yml\`, все файлы — \`/${config.label} e2e all\`.`);
+            return true;
+        }
+
+        if (block) {
+            try {
+                inline = parseScenario(block);
+            }
+            catch (error) {
+                await say(`⚠️ **JustAI e2e**: сценарий не разобран — ${error instanceof ScenarioError ? error.message : message(error)}`);
+                return true;
+            }
+        }
+
+        const { branch: target, note } = await this.liveBranch(branch);
+        const release = this.awake();
+        this.status = { ...this.status, state: "working", currentIssue: postTo, lastError: undefined };
+
+        try {
+            await this.e2eSuite(postTo, target, note, inline, inline ? undefined : files);
+        }
+        catch (error) {
+            await say(`⚠️ **JustAI e2e**: проверка не выполнена: ${clip(message(error), 2_000)}`);
+        }
+        finally {
+            release();
+            this.status = { ...this.status, currentIssue: undefined, ...(this.status.state === "working" ? { state: "idle" as const } : {}) };
+        }
+
+        return true;
+    }
+
+    /**
+     * Прогнать сценарии на ветке и выложить отчёты (по одному на сценарий). Запущенное приложение той же ветки
+     * переиспользуется, иначе поднимается на время прогона. ran — сколько сценариев нашлось.
+     */
+    private async e2eSuite(postTo: number, branch: string, note: string, inline: Scenario | undefined, files: string | undefined): Promise<{ ran: number; passed: boolean }> {
+        const apps = this.apps!;
+        const running = apps.status();
+        const reuse = running !== null && running.branch === branch && !inline?.start;
+        const app = reuse ? running : await apps.start(branch, {
+            ...(inline?.start ? { start: inline.start } : {}),
+            ...(inline?.url ? { url: inline.url } : {}),
+            ...(inline?.readyTimeoutSec ? { readyTimeoutSec: inline.readyTimeoutSec } : {}),
+        });
+        let passed = true;
+        let ran = 0;
+
+        try {
+            apps.touch();
+            const scenarios = inline ? [{ label: inline.name ?? "сценарий из issue", scenario: inline }] : await loadScenarioFiles(app.dir, files ?? "all");
+
+            for (const entry of scenarios) {
+                ran += 1;
+
+                if (!("scenario" in entry)) {
+                    passed = false;
+                    await this.soft(this.deps.client.comment(postTo, `❌ **JustAI e2e** \`${entry.label}\`: сценарий не разобран — ${entry.error}`), "comments");
+                    continue;
+                }
+
+                const result = await runScenario(entry.scenario, {
+                    browser: this.deps.e2eBrowser!,
+                    baseUrl: scenarioUrl(entry.scenario.url, app),
+                    pageKey: `e2e-${postTo}`,
+                    processes: this.deps.processes!,
+                    cwd: app.dir,
+                    isDangerous: command => this.dangerReason(command),
+                    previous: (name, width) => this.previousShot(entry.label, name, width),
+                });
+                apps.touch();
+                passed &&= result.passed;
+                await this.publishE2E(postTo, entry.label, result, `ветка \`${app.branch}\` (коммит ${app.commit}), ${app.how}${note ? `. ${note}` : ""}`);
+            }
+        }
+        finally {
+            if (!reuse) await apps.stop();
+        }
+
+        return { ran, passed };
+    }
+
+    private shotFile(label: string, name: string, width: number): string {
+        const safe = (text: string) => text.replace(/[^\w.-]+/g, "_").slice(0, 60);
+        return path.join(this.deps.workspaceRoot, ".justai", "e2e", safe(label), `${safe(name)}-${width}.png`);
+    }
+
+    private async previousShot(label: string, name: string, width: number): Promise<string | null> {
+        return readFile(this.shotFile(label, name, width)).then(buffer => buffer.toString("base64"), () => null);
+    }
+
+    /** Отчёт сценария: скриншоты (и экран падения) — в служебную ветку, таблица шагов — комментарием. */
+    private async publishE2E(postTo: number, label: string, result: E2EResult, where: string): Promise<void> {
+        for (const shot of result.screenshots) {
+            const file = this.shotFile(label, shot.name, shot.width);
+            await mkdir(path.dirname(file), { recursive: true });
+            await writeFile(file, Buffer.from(shot.dataBase64, "base64"));
+        }
+
+        const links = await this.uploadImages(postTo, result.screenshots.map(shot => ({
+            dataBase64: shot.dataBase64,
+            name: `${shot.name}-${shot.width}`,
+            alt: `${shot.name} (${shot.width}px)`,
+            caption: `${shot.name} — ${shot.width}px`,
+        })));
+        const failure = result.failure?.screenshot
+            ? (await this.uploadImages(postTo, [{ dataBase64: result.failure.screenshot, name: "failure", alt: "падение" }]))[0]?.match(/\((.+)\)$/)?.[1]
+            : undefined;
+
+        await this.soft(this.deps.client.comment(postTo, e2eReport(result, where, links, failure)), "comments");
     }
 
     /** Остановить процессы и закрыть браузер, которые остались от сессии. */
@@ -1197,6 +1479,86 @@ export function followUpCommand(issue: GitHubIssue, label: string): { target: nu
 
     const action = match[1] === "stop" || match[1] === "pause" ? "stop" : match[1] === "merge" ? "merge" : "continue";
     return { target: Number(match[2]), action };
+}
+
+/** «/justai app start|stop|status|logs [#N]» отдельной строкой (в issue или комментарии). */
+export function appCommand(body: string, label: string): { action: "start" | "stop" | "status" | "logs"; target?: number } | null {
+    const match = new RegExp(`^\\s*/${escapeRegExp(label)}\\s+app\\s+(start|stop|status|logs)(?:\\s+#(\\d+))?\\s*$`, "im").exec(body);
+
+    if (!match) return null;
+
+    return { action: match[1]!.toLowerCase() as "start" | "stop" | "status" | "logs", ...(match[2] ? { target: Number(match[2]) } : {}) };
+}
+
+/** «/justai e2e [#N] [all | путь]» отдельной строкой; сценарий — блоком ```yaml рядом. */
+export function e2eCommand(body: string, label: string): { target?: number; files?: string } | null {
+    const match = new RegExp(`^\\s*/${escapeRegExp(label)}\\s+e2e(?:\\s+#(\\d+))?(?:\\s+(\\S+))?\\s*$`, "im").exec(body);
+
+    if (!match) return null;
+
+    return { ...(match[1] ? { target: Number(match[1]) } : {}), ...(match[2] ? { files: match[2] } : {}) };
+}
+
+/** Каталог сценариев проекта: «/justai e2e all» и проверка перед слиянием. */
+export const E2E_DIR = "tests/e2e";
+
+/** Сценарии из файлов рабочей копии: all — все из tests/e2e, иначе один файл (только внутри проекта). */
+export async function loadScenarioFiles(dir: string, files: string): Promise<Array<{ label: string; scenario: Scenario } | { label: string; error: string }>> {
+    const root = path.resolve(dir);
+    let names: string[];
+
+    if (files === "all") {
+        names = await readdir(path.join(root, E2E_DIR)).then(
+            entries => entries.filter(name => /\.(ya?ml|json)$/i.test(name)).sort().map(name => `${E2E_DIR}/${name}`),
+            () => [],
+        );
+    }
+    else {
+        const resolved = path.resolve(root, files);
+
+        if (!resolved.startsWith(root + path.sep)) {
+            return [{ label: files, error: "the path must be inside the project" }];
+        }
+
+        names = [path.relative(root, resolved).split(path.sep).join("/")];
+    }
+
+    const result: Array<{ label: string; scenario: Scenario } | { label: string; error: string }> = [];
+
+    for (const name of names) {
+        try {
+            result.push({ label: name, scenario: parseScenario(await readFile(path.join(root, name), "utf8")) });
+        }
+        catch (error) {
+            result.push({ label: name, error: error instanceof ScenarioError ? error.message : `cannot read: ${message(error)}` });
+        }
+    }
+
+    return result;
+}
+
+/** Адрес для сценария: у встроенного сервера порт свой — из url сценария берётся только путь. */
+function scenarioUrl(url: string | undefined, app: RunningApp): string {
+    if (!url) return app.url;
+    if (!app.how.startsWith("built-in")) return url;
+
+    try {
+        const parsed = new URL(url, "http://localhost");
+        return new URL(`${parsed.pathname.replace(/^\/+/, "")}${parsed.search}`, new URL("/", app.url)).toString();
+    }
+    catch {
+        return app.url;
+    }
+}
+
+export function appStatusText(app: RunningApp | null, idleMinutes: number): string {
+    if (!app) return "**JustAI**: приложение не запущено.";
+
+    const minutes = (ms: number) => Math.max(0, Math.round(ms / 60_000));
+    return [
+        `🟢 **JustAI**: приложение работает — ветка \`${app.branch}\` (коммит ${app.commit}), ${app.how}.`,
+        `Адрес на ПК1: ${app.url} · запущено ${minutes(Date.now() - app.startedAt)} мин назад · остановится через ${Math.max(0, idleMinutes - minutes(Date.now() - app.lastUsed))} мин без обращений.`,
+    ].join("\n");
 }
 
 /** Issue-команда «/justai status» или «/justai ping» отдельной строкой. */

@@ -171,5 +171,28 @@ export function createGitHubTools(client: () => GitHubClient | null, label: () =
         },
     });
 
-    return [createTask, listTasks, reviewTask, requestChanges, testTask, runCommand, mergeTask];
+    const e2e = defineTool({
+        name: "github_e2e",
+        description: [
+            "Runs a browser scenario on the coding agent's computer MECHANICALLY (no model involved, so PASS/FAIL is reliable):",
+            "the app is started from the task branch (or main), each step is executed, and the issue gets a step table, screenshots, console errors and visual changes since the last run.",
+            "Scenario YAML: {name?, start?, url?, steps: [ {click: sel}, {type: {selector, text, submit}}, {press: key}, {expectText: {selector, contains|equals|matches}},",
+            "{expectVisible: sel}, {expectHidden: sel}, {expectClass: {selector, has|any}}, {expectCount: {selector, equals|min|max}}, {eval: {code, expect}},",
+            "{screenshot: {name, width}}, {viewport: {width}}, {wait: ms}, {waitFor: sel}, {open: path}, {expectNoConsoleErrors: null}, {run: {command, expectOutput}} ]}.",
+            "Read the result with github_review_task on the created issue.",
+        ].join(" "),
+        inputSchema: z.object({
+            title: z.string().min(3).max(200),
+            scenario: z.string().min(10).max(30_000).describe("Scenario in YAML (or JSON)."),
+            of_task: z.number().int().positive().optional().describe("Test the branch of this task instead of the main branch."),
+        }),
+        kind: "network",
+        run: async ({ title, scenario, of_task }) => {
+            const body = `/${label()} e2e${of_task ? ` #${of_task}` : ""}\n\n\`\`\`yaml\n${scenario.trim()}\n\`\`\``;
+            const issue = await github().createIssue(`E2E: ${title}`, body, []);
+            return `Scenario posted as #${issue.number}: ${issue.url}`;
+        },
+    });
+
+    return [createTask, listTasks, reviewTask, requestChanges, testTask, runCommand, mergeTask, e2e];
 }

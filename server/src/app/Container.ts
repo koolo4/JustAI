@@ -441,7 +441,9 @@ export class Container {
                 processes: this.processManager,
                 browser: this.browserService,
                 keepAwake: this.keepAwake,
+                e2eBrowser: this.browserService,
                 config: {
+                    ...(Number(process.env.JUSTAI_APP_IDLE_MIN) > 0 ? { appIdleMinutes: Number(process.env.JUSTAI_APP_IDLE_MIN) } : {}),
                     keepAwake: keepAwakeModeFromEnv(process.env.JUSTAI_KEEP_AWAKE),
                     label: githubLabel(),
                     allowedUsers: (process.env.JUSTAI_GITHUB_ALLOWED_USERS ?? "").split(",").map(user => user.trim()).filter(Boolean),
