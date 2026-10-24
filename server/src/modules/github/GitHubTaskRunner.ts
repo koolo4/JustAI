@@ -42,6 +42,8 @@ export interface GitHubRunnerConfig {
     /** Сливать PR по команде «/justai merge» (при зелёных проверках). По умолчанию да. */
     merge?: boolean;
     mergeMethod?: "squash" | "merge" | "rebase";
+    /** task — не спать, пока идёт задача (по умолчанию); always — пока включён мост; off. */
+    keepAwake?: "task" | "always" | "off";
 }
 
 export interface GitHubRunnerStatus {
@@ -126,6 +128,12 @@ export class GitHubTaskRunner {
     private status: GitHubRunnerStatus;
     /** Прерывает проверки и команды при остановке моста. */
     private aborter = new AbortController();
+    private releaseAlways?: () => void;
+
+    /** Пока идёт работа — компьютер не засыпает (если не выключено настройкой). */
+    private awake(): () => void {
+        return this.deps.config.keepAwake === "off" ? () => undefined : this.deps.keepAwake?.acquire() ?? (() => undefined);
+    }
 
     constructor(
         private readonly deps: {
@@ -141,6 +149,8 @@ export class GitHubTaskRunner {
             processes?: ProcessManager;
             /** Закрыть страницу браузера сессии после задачи. */
             browser?: { close(sessionId: string): Promise<unknown> };
+            /** Не давать компьютеру уснуть, пока идёт работа (см. config.keepAwake). */
+            keepAwake?: { acquire(): () => void };
             log?: (message: string) => void;
         },
     ) {
@@ -157,6 +167,7 @@ export class GitHubTaskRunner {
 
         this.aborter = new AbortController();
         this.status = { ...this.status, enabled: true, state: "idle" };
+        if (this.deps.config.keepAwake === "always") this.releaseAlways = this.deps.keepAwake?.acquire();
         this.timer = setInterval(() => void this.check(), this.deps.config.pollMs);
         this.timer.unref();
         void this.check();
@@ -167,6 +178,8 @@ export class GitHubTaskRunner {
         this.timer = undefined;
         this.status = { ...this.status, enabled: false, state: "stopped" };
         this.aborter.abort();
+        this.releaseAlways?.();
+        this.releaseAlways = undefined;
         await this.running?.catch(() => undefined);
     }
 
@@ -256,6 +269,40 @@ export class GitHubTaskRunner {
             return;
         }
 
+        // «/justai close #2 #3 …» — закрыть ненужные issues (планировщику без права Issues: write больше нечем).
+        for (const issue of open) {
+            const targets = closeCommand(issue, config.label);
+
+            if (!targets || state.followUps?.includes(issue.number)) {
+                continue;
+            }
+
+            state.followUps = [...state.followUps ?? [], issue.number];
+            await this.save(state);
+
+            const closed: number[] = [];
+            const skipped: string[] = [];
+
+            for (const number of targets) {
+                const target = await client.getIssue(number).catch(() => null);
+
+                if (!target) { skipped.push(`#${number} — не найден`); continue; }
+                if (target.isPullRequest) { skipped.push(`#${number} — это pull request`); continue; }
+                if (state.tasks[number]?.status === "working") { skipped.push(`#${number} — сейчас выполняется`); continue; }
+
+                await this.soft(client.comment(number, `Закрыто по команде из #${issue.number}.`), "comments");
+                await this.soft(client.closeIssue(number), "closing issues");
+                closed.push(number);
+            }
+
+            await this.soft(client.comment(issue.number, [
+                closed.length ? `✅ **JustAI**: закрыты ${closed.map(number => `#${number}`).join(", ")}.` : "**JustAI**: ничего не закрыто.",
+                ...skipped.map(item => `- не закрыт ${item}`),
+            ].join("\n")), "comments");
+            await this.soft(client.closeIssue(issue.number), "closing issues");
+            return;
+        }
+
         // Команда отдельным issue: «/justai run [#N] команда» первой строкой.
         for (const issue of open) {
             const request = runIssueCommand(issue, config.label);
@@ -278,7 +325,7 @@ export class GitHubTaskRunner {
         }
 
         const issues = open.filter(issue => followUpTarget(issue, config.label) === null && !runIssueCommand(issue, config.label)
-            && (isTask(issue, config.label) || isTestTask(issue, config.label)));
+            && !closeCommand(issue, config.label) && (isTask(issue, config.label) || isTestTask(issue, config.label)));
 
         for (const issue of issues) {
             const task = state.tasks[issue.number];
@@ -389,6 +436,7 @@ export class GitHubTaskRunner {
         state.tasks[issue.number] = task;
         if (state.waiting?.[issue.number]) delete state.waiting[issue.number];
         await this.save(state);
+        const release = this.awake();
 
         try {
             if (kind === "test") {
@@ -511,6 +559,7 @@ export class GitHubTaskRunner {
             if (kind === "test") await this.discardChanges().catch(() => undefined);
             await this.git(["checkout", base]).catch(() => undefined);
             await this.save(state);
+            release();
             this.status = { ...this.status, currentIssue: undefined, currentSessionId: undefined, ...(this.status.state === "working" ? { state: "idle" as const } : {}) };
         }
     }
@@ -548,13 +597,16 @@ export class GitHubTaskRunner {
         const checks = await this.runChecks();
         if (checks) task.checks = checks.status;
         const screenshots = await this.uploadScreenshots(issue.number, messages);
-        const passed = session.status === "completed" && testVerdict(report) !== "fail" && checks?.status !== "failed";
+        const evidence = testEvidence(messages, `${issue.title}\n${issue.body}`);
+        // PASS — только явный вердикт агента, подкреплённый действиями: пустой отчёт или «проверка» в два шага — не PASS.
+        const passed = session.status === "completed" && evidence.problem === null && checks?.status !== "failed";
         task.status = passed ? "review" : "failed";
 
         await watch.update(passed ? "✅ **JustAI** закончил проверку — отчёт ниже." : "❌ **JustAI**: проверка не прошла — отчёт ниже.");
         await this.soft(client.comment(issue.number, [
             `🧪 **JustAI** — результат проверки: ${passed ? "✅ PASS" : "❌ FAIL"}`,
-            `Проверено: ${where}. Файлы проекта не менялись.`,
+            `Проверено: ${where}. Файлы проекта не менялись. Действий агента: ${evidence.actions}, скриншотов: ${evidence.screenshots}.`,
+            evidence.problem ? `⚠ ${evidence.problem}` : "",
             session.lastError ? `Ошибка: ${session.lastError}` : "",
             ...(checks ? ["", checksReport(checks)] : []),
             "",
@@ -592,11 +644,15 @@ export class GitHubTaskRunner {
         }
 
         const base = await client.defaultBranch();
-        const target = branch ?? base;
+        // Ветку задачи удаляет слияние (или в ней ещё нет коммитов) — тогда команда выполняется в основной.
+        const branchGone = branch !== undefined && branch !== base
+            && !(await this.git(["ls-remote", "--heads", "origin", branch], true).catch(() => "")).trim();
+        const target = branch && !branchGone ? branch : base;
         const limit = config.commandTimeoutMs ?? 300_000;
 
         this.status = { ...this.status, state: "working", currentIssue: postTo, lastError: undefined };
         this.deps.log?.(`[github] issue #${postTo}: run ${command} on ${target}`);
+        const release = this.awake();
 
         try {
             await this.checkoutDetached(target);
@@ -608,6 +664,7 @@ export class GitHubTaskRunner {
 
             await this.soft(client.comment(postTo, [
                 `▶ **JustAI** выполнил ${code(command)} в ветке \`${target}\` (коммит ${commit})`,
+                ...(branchGone ? [`Ветки \`${branch}\` на GitHub нет (задача слита или в ней нет коммитов) — команда выполнена в \`${base}\`.`] : []),
                 `${ok ? "✅" : "❌"} ${outcome} · ${Math.round((Date.now() - started) / 1000)} с`,
                 "",
                 fenced(tail(result.output, COMMAND_OUTPUT_CHARS) || "(нет вывода)"),
@@ -621,6 +678,7 @@ export class GitHubTaskRunner {
             await this.discardChanges().catch(() => undefined);
             await this.git(["checkout", base]).catch(() => undefined);
             this.status = { ...this.status, currentIssue: undefined, ...(this.status.state === "working" ? { state: "idle" as const } : {}) };
+            release();
         }
 
         return true;
@@ -655,6 +713,7 @@ export class GitHubTaskRunner {
         const base = await client.defaultBranch();
         this.status = { ...this.status, state: "working", currentIssue: issueNumber, lastError: undefined };
         this.deps.log?.(`[github] issue #${issueNumber}: merge ${task.branch}`);
+        const release = this.awake();
 
         try {
             // Проверки — на том, что сейчас в ветке PR (после отчёта её могли доработать).
@@ -691,6 +750,7 @@ export class GitHubTaskRunner {
             await this.git(["checkout", base]).catch(() => undefined);
             await this.save(state);
             this.status = { ...this.status, currentIssue: undefined, ...(this.status.state === "working" ? { state: "idle" as const } : {}) };
+            release();
         }
 
         return true;
@@ -1006,6 +1066,35 @@ export function runCommentCommand(body: string, label: string): string | null {
     return match ? match[1]! : null;
 }
 
+/** Меньше действий — проверкой это не считается (открыть страницу — ещё не проверить её). */
+const MIN_TEST_ACTIONS = 3;
+
+/**
+ * Чем подкреплён вердикт проверки: сколько действий сделал агент и сколько снял скриншотов.
+ * problem — почему PASS засчитать нельзя (нет вердикта, слишком мало действий, нет обещанных скриншотов).
+ */
+export function testEvidence(messages: Message[], task: string): { actions: number; screenshots: number; problem: string | null } {
+    let actions = 0;
+
+    for (const message of messages) {
+        for (const block of message.content) {
+            if (block.type === "tool_use" && block.name !== "todo_write") actions += 1;
+        }
+    }
+
+    const screenshots = collectImages(messages).length;
+    const verdict = testVerdict(lastAssistantText(messages));
+    const wantsScreenshots = /скриншот|снимок|screenshot/i.test(task);
+
+    const problem = verdict === "fail" ? "Агент нашёл проблемы (RESULT: FAIL)."
+        : verdict === "unknown" ? "Агент не дал вердикт (нет строки RESULT: PASS) — проверка не подтверждена."
+            : actions < MIN_TEST_ACTIONS ? `Агент сделал всего ${actions} действия — шаги проверки не выполнены, вердикт PASS не подтверждён.`
+                : wantsScreenshots && screenshots === 0 ? "Задача просила скриншоты, а агент не снял ни одного — проверка не подтверждена."
+                    : null;
+
+    return { actions, screenshots, problem };
+}
+
 /** Вердикт агента-проверяющего: последняя строка «RESULT: PASS / FAIL». */
 export function testVerdict(report: string): "pass" | "fail" | "unknown" {
     const matches = [...report.matchAll(/RESULT:\s*\**\s*(PASS|FAIL)/gi)];
@@ -1089,6 +1178,15 @@ export function followUpCommand(issue: GitHubIssue, label: string): { target: nu
     return { target: Number(match[2]), action };
 }
 
+/** Issue-команда «/justai close #2 #3, #4» (отдельной строкой): номера issues, которые надо закрыть. */
+export function closeCommand(issue: GitHubIssue, label: string): number[] | null {
+    const match = new RegExp(`^\\s*/${escapeRegExp(label)}\\s+close\\s+((?:#\\d+[\\s,]*)+)$`, "im").exec(issue.body);
+
+    if (!match) return null;
+
+    return [...new Set([...match[1]!.matchAll(/#(\d+)/g)].map(ref => Number(ref[1])))].filter(number => number !== issue.number);
+}
+
 /** Комментарий-команда «/justai merge» отдельной строкой: слить PR задачи. */
 export function isMergeCommand(body: string, label: string): boolean {
     return new RegExp(`^\\s*/${escapeRegExp(label)}\\s+merge\\s*$`, "im").test(body);
@@ -1155,6 +1253,7 @@ export function taskPrompt(issue: GitHubIssue, branch: string, label = "justai")
         "",
         "---",
         `This is GitHub task #${issue.number}. You are working in a git repository on branch ${branch}. Implement this task completely in the files, run the project's checks or tests if there are any, and fix what fails.`,
+        "If the task gives the complete content of a file, write it exactly with write_file (do not patch it with edit_file) and change nothing in that content.",
         "Do not commit or push: JustAI commits your changes and opens a pull request after you finish.",
         "Finish with a short report: what you changed (files), how you verified it, and anything left to do.",
     ].join("\n");
@@ -1276,7 +1375,7 @@ export function feedbackPrompt(issue: GitHubIssue, feedback: GitHubComment[], br
         "",
         "---",
         `These are new comments from ${[...new Set(feedback.map(item => item.author))].join(", ")} on GitHub task #${issue.number} (${issue.title}).`,
-        `Address them on branch ${branch}. Do not commit or push. Finish with a short report of what you changed.`,
+        `Address them on branch ${branch}. If they give the complete content of a file, write it exactly with write_file instead of patching it. Do not commit or push. Finish with a short report of what you changed.`,
     ].join("\n");
 }
 

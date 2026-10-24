@@ -24,7 +24,7 @@ import { BOT_MARKER, GitHubError, type GitHubClient, type GitHubComment, type Gi
 import { ProcessManager } from "../../../src/infrastructure/process/ProcessManager.js";
 import { Verifier } from "../../../src/modules/agent/runtime/Verifier.js";
 import {
-    ARTIFACTS_BRANCH, checksReport, dependsOn, followUpCommand, followUpTarget, GitHubTaskRunner, isMergeCommand, isStopCommand, isTask, isTestTask, LABELS, originMatches,
+    ARTIFACTS_BRANCH, checksReport, closeCommand, dependsOn, testEvidence, followUpCommand, followUpTarget, GitHubTaskRunner, isMergeCommand, isStopCommand, isTask, isTestTask, LABELS, originMatches,
     progressReport, runCommentCommand, runIssueCommand, stripCommands, taskPrompt, testTarget, testVerdict,
 } from "../../../src/modules/github/GitHubTaskRunner.js";
 
@@ -361,7 +361,7 @@ describe.skipIf(!git.available)("GitHubTaskRunner", () => {
         expect(prompts.map(item => (item.content[0] as { text: string }).text.split("\n")[0])).toEqual(["прочитай slow.txt", "прочитай other.txt"]);
     }, 60_000);
 
-    it("runs a test task without changing files: verdict, project checks and screenshots in the report", async () => {
+    it("runs a test task without changing files: project checks and screenshots in the report, no PASS without a verdict", async () => {
         await writeFile(path.join(root, "package.json"), JSON.stringify({ name: "p", scripts: { test: "node -e \"console.log('tests ok')\"" } }));
         run(root, "add", "package.json");
         run(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "package");
@@ -411,7 +411,7 @@ describe.skipIf(!git.available)("GitHubTaskRunner", () => {
         await tester.check();
 
         const report = github.comments.get(60)!.at(-1)!.body;
-        expect(report).toContain("результат проверки: ✅ PASS");
+        // Mock-агент не пишет «RESULT: PASS» и делает одно действие — это не подтверждённая проверка.
         expect(report).toContain("ветка `main`");
         expect(report).toContain("Проверки проекта");
         expect(report).toContain("✅ все прошли (1)");
@@ -424,8 +424,8 @@ describe.skipIf(!git.available)("GitHubTaskRunner", () => {
         expect(run(remote, "branch", "--list", "justai/*").trim()).toBe("");
         expect(existsSync(path.join(root, "leftover.txt"))).toBe(false);
         expect(run(root, "rev-parse", "--abbrev-ref", "HEAD").trim()).toBe("main");
-        expect(tester.getStatus().tasks).toEqual([{ issue: 60, status: "review", branch: "main", kind: "test", checks: "passed" }]);
-        expect(github.issues[0]!.labels).toContain(LABELS.review);
+        expect(tester.getStatus().tasks).toEqual([{ issue: 60, status: "failed", branch: "main", kind: "test", checks: "passed" }]);
+        expect(github.issues[0]!.labels).toContain(LABELS.failed);
 
         // Проверяющий работал без правки файлов.
         expect((await testSessions.list())[0]!.profile).toBe("tester");
@@ -554,6 +554,60 @@ describe.skipIf(!git.available)("GitHubTaskRunner", () => {
         expect(github.comments.get(90)!.at(-1)!.body).toContain("слияние на этом ПК выключено");
         expect(github.merged).toEqual([]);
     }, 90_000);
+
+    it("closes issues on «/justai close #N …» and runs commands in main after the task branch is gone", async () => {
+        const processes = new ProcessManager();
+        const bridge = new GitHubTaskRunner({
+            client: github as unknown as GitHubClient,
+            git,
+            sessions,
+            permissions: new PermissionService({ rulesFile: path.join(root, ".justai", "p7.json"), emit: () => undefined }),
+            workspaceRoot: root,
+            processes,
+            keepAwake: { acquire: () => { awake.held += 1; awake.total += 1; return () => { awake.held -= 1; }; } },
+            config: { label: "justai", allowedUsers: [], profile: "coder", provider: "mock", pollMs: 60_000, allowPublic: false, token: "" },
+        });
+        const awake = { held: 0, total: 0 };
+
+        github.issue(2, "old question", "me", { labels: [] });
+        github.issue(3, "old task", "me", { labels: [] });
+        github.issue(4, "Cleanup", "me", { labels: [], body: "/justai close #2, #3 #99" });
+        await bridge.check();
+
+        expect(github.closed).toEqual([2, 3, 4]);
+        expect(github.comments.get(2)![0]!.body).toContain("по команде из #4");
+        expect(github.comments.get(4)![0]!.body).toContain("закрыты #2, #3");
+        expect(github.comments.get(4)![0]!.body).toContain("#99 — не найден");
+
+        // Ветки задачи на GitHub нет — команда выполняется в main, а не падает.
+        github.issue(70, "создай файл a.txt");
+        await bridge.check();
+        run(remote, "branch", "-D", "justai/issue-70");
+        github.issue(71, "Run", "me", { labels: [], body: "/justai run #70 node -p \"1+1\"" });
+        await bridge.check();
+        expect(github.comments.get(71)![0]!.body).toContain("ветке `main`");
+        expect(github.comments.get(71)![0]!.body).toContain("нет (задача слита");
+
+        // Пока шли задача и команда, компьютер держали бодрым; после — отпустили.
+        expect(awake.total).toBe(2);
+        expect(awake.held).toBe(0);
+    }, 90_000);
+
+    it("does not count a test as PASS without a verdict, actions or the screenshots it asked for", () => {
+        const step = (id: string, name: string) => [
+            createMessage("assistant", [{ type: "tool_use", id, name, input: {} }]),
+            createMessage("user", [{ type: "tool_result", toolUseId: id, content: "ok", isError: false }]),
+        ];
+        const finish = (text: string) => createMessage("assistant", [{ type: "text", text }]);
+        const work = [...step("a", "run_command"), ...step("b", "browser_open"), ...step("c", "browser_click")];
+
+        expect(testEvidence([...step("a", "run_command"), finish("all good")], "check").problem).toContain("не дал вердикт");
+        expect(testEvidence([...step("a", "run_command"), finish("RESULT: PASS")], "check").problem).toContain("всего 1");
+        expect(testEvidence([...work, finish("RESULT: PASS")], "сделай скриншот").problem).toContain("ни одного");
+        expect(testEvidence([...work, finish("RESULT: PASS")], "check")).toEqual({ actions: 3, screenshots: 0, problem: null });
+        expect(testEvidence([...work, finish("RESULT: FAIL")], "check").problem).toContain("RESULT: FAIL");
+        expect(closeCommand({ number: 9, title: "x", body: "/justai close #2 #3, #9", author: "me", labels: [], url: "", isPullRequest: false }, "justai")).toEqual([2, 3]);
+    });
 
     it("recognises dependencies and merge commands", () => {
         const make = (body: string) => ({ number: 1, title: "x", body, author: "me", labels: [], url: "", isPullRequest: false });

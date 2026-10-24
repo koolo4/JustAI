@@ -122,7 +122,19 @@ export function createBrowserTools(browser: BrowserService): Tool[] {
         changesFiles: false,
         run: async ({ selector }, context) => {
             const { page } = await browser.page(context.sessionId);
-            await page.locator(selector).first().click({ timeout: ACTION_TIMEOUT_MS }).catch(fail);
+
+            try {
+                await page.locator(selector).first().click({ timeout: ACTION_TIMEOUT_MS });
+            }
+            catch (error) {
+                // Маленькая модель угадывает селектор («text=Угадай героя» у кнопки с эмодзи и описанием) —
+                // показываем, что на странице можно нажать и каким селектором.
+                const hints = await clickableHints(page).catch(() => [] as string[]);
+                throw new ToolError([
+                    error instanceof Error ? error.message.split("\n")[0]! : String(error),
+                    ...(hints.length ? ["Clickable elements on the page (use one of these selectors):", ...hints] : []),
+                ].join("\n"));
+            }
             await page.waitForLoadState("networkidle", { timeout: 3_000 }).catch(() => undefined);
 
             return `Clicked ${selector}. Page: ${page.url()}`;
@@ -164,4 +176,26 @@ export function createBrowserTools(browser: BrowserService): Tool[] {
     });
 
     return [open, screenshot, text, consoleTool, click, type, close];
+}
+
+/** Видимые кнопки, ссылки и поля: готовый селектор и текст — до 20 штук. */
+async function clickableHints(page: { evaluate<R>(fn: () => R): Promise<R> }): Promise<string[]> {
+    return page.evaluate(() => {
+        const css = (value: string) => (window.CSS?.escape ? window.CSS.escape(value) : value);
+        const nodes = Array.from(document.querySelectorAll<HTMLElement>("button, a[href], input, select, textarea, [role=button], [onclick]"));
+
+        return nodes
+            .filter(node => node.offsetParent !== null || node.getClientRects().length > 0)
+            .slice(0, 20)
+            .map(node => {
+                const tag = node.tagName.toLowerCase();
+                const data = Array.from(node.attributes).find(attribute => attribute.name.startsWith("data-"));
+                const selector = node.id ? `#${css(node.id)}`
+                    : data ? `${tag}[${data.name}="${data.value}"]`
+                        : node.classList.length ? `${tag}.${Array.from(node.classList).map(css).join(".")}`
+                            : tag;
+                const label = (node.innerText || (node as HTMLInputElement).value || node.getAttribute("aria-label") || "").replace(/\s+/g, " ").trim().slice(0, 50);
+                return `- ${selector}${label ? ` — "${label}"` : ""}`;
+            });
+    });
 }

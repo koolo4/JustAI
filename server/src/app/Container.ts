@@ -53,6 +53,7 @@ import { TerminalService } from "../infrastructure/terminal/TerminalService.js";
 import { CompletionService } from "../modules/completion/CompletionService.js";
 import { GitHubClient } from "../modules/github/GitHubClient.js";
 import { GitHubTaskRunner } from "../modules/github/GitHubTaskRunner.js";
+import { KeepAwake, keepAwakeModeFromEnv } from "../infrastructure/power/KeepAwake.js";
 import { createGitHubTools } from "../modules/agent/tools/githubTools.js";
 import { createShellTools } from "../modules/agent/tools/shellTools.js";
 import { ProcessManager } from "../infrastructure/process/ProcessManager.js";
@@ -121,6 +122,9 @@ export class Container {
     public githubRunner?: GitHubTaskRunner;
 
     private readonly verifier: Verifier;
+
+    /** Компьютер не засыпает, пока мост выполняет задачу. */
+    private readonly keepAwake = new KeepAwake({ log: message => this.logger.warn(message) });
 
     private readonly permissions: PermissionService;
 
@@ -436,7 +440,9 @@ export class Container {
                 verifier: this.verifier,
                 processes: this.processManager,
                 browser: this.browserService,
+                keepAwake: this.keepAwake,
                 config: {
+                    keepAwake: keepAwakeModeFromEnv(process.env.JUSTAI_KEEP_AWAKE),
                     label: githubLabel(),
                     allowedUsers: (process.env.JUSTAI_GITHUB_ALLOWED_USERS ?? "").split(",").map(user => user.trim()).filter(Boolean),
                     profile: process.env.JUSTAI_GITHUB_PROFILE || "coder",
@@ -468,6 +474,7 @@ export class Container {
         const runnerStopped = this.githubRunner?.stop();
         await this.sessionManager.stopAll();
         await runnerStopped;
+        this.keepAwake.dispose();
         this.terminals.closeAll();
 
         await Promise.allSettled([
