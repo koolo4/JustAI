@@ -1323,3 +1323,29 @@ button {
     padding: 8px;
     resize: vertical;
 }
+
+/* Новый проект в выборе папки. */
+.workspace-new-toggle { margin-top: 8px; font-size: 13px; }
+
+.workspace-create {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid #242a32;
+}
+
+.workspace-create label { display: flex; flex-direction: column; gap: 3px; }
+.workspace-create label.checkbox-label { flex-direction: row; align-items: center; gap: 6px; }
+
+.workspace-create input:not([type="checkbox"]) {
+    background: #0c0f12;
+    color: #e8edf2;
+    border: 1px solid #303842;
+    border-radius: 6px;
+    padding: 6px 8px;
+}
+
+.workspace-hint { margin: 0; line-height: 1.4; }
+.workspace-create-actions { display: flex; gap: 10px; align-items: center; }

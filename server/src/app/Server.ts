@@ -10,6 +10,7 @@ import { createAgentRouter } from '../modules/agent/AgentRoutes.js';
 import type { SettingsResponse, WorkspaceInfo } from '@justai/shared';
 
 import { Container } from './Container.js';
+import { createProject } from './ProjectCreator.js';
 
 import { BadRequestError } from '../core/errors/BadRequestError.js';
 import { ErrorHandlerMiddleware } from '../core/middleware/ErrorHandlerMiddleware.js';
@@ -138,6 +139,37 @@ export class Server {
                     catch (error) {
                         next(error);
                     }
+                },
+            );
+
+            // Новый проект: пустая папка с git или клон репозитория GitHub; сразу открывается.
+            // bridge — сделать этот репозиторий репозиторием моста GitHub (настройка JUSTAI_GITHUB_REPO).
+            this.app.post(
+                '/api/workspace/create',
+                (req, res, next) => {
+                    void (async () => {
+                        const body = (req.body ?? {}) as { parent?: unknown; name?: unknown; repo?: unknown; bridge?: unknown };
+
+                        if (typeof body.parent !== 'string' || typeof body.name !== 'string') {
+                            throw new BadRequestError('Pass "parent" (folder for the project) and "name".');
+                        }
+
+                        const repo = typeof body.repo === 'string' && body.repo.trim() ? body.repo.trim() : undefined;
+                        const target = await createProject(
+                            { parent: body.parent, name: body.name, ...(repo ? { repo } : {}) },
+                            this.container.gitService,
+                            process.env.JUSTAI_GITHUB_TOKEN,
+                        );
+
+                        const info = hooks.select(target);
+
+                        if (repo && body.bridge === true) {
+                            hooks.updateSettings({ JUSTAI_GITHUB_REPO: repo });
+                        }
+
+                        res.on('finish', () => hooks.restart());
+                        res.status(202).json(info);
+                    })().catch(next);
                 },
             );
 

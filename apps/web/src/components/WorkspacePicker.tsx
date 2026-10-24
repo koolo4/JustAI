@@ -14,6 +14,12 @@ export function WorkspacePicker() {
     const [path, setPath] = useState("");
     const [error, setError] = useState("");
     const [switching, setSwitching] = useState(false);
+    // Новый проект: пустой (папка + git) или клон репозитория GitHub.
+    const [creating, setCreating] = useState(false);
+    const [parent, setParent] = useState("");
+    const [name, setName] = useState("");
+    const [repo, setRepo] = useState("");
+    const [useForBridge, setUseForBridge] = useState(true);
 
     useEffect(() => {
         apiFetch("/workspace/info")
@@ -68,6 +74,34 @@ export function WorkspacePicker() {
         }
     }
 
+    async function createProject() {
+        setError("");
+        setSwitching(true);
+
+        try {
+            const response = await apiFetch("/workspace/create", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    parent: parent.trim() || parentOf(info?.root ?? ""),
+                    name: name.trim() || repo.trim().split("/").pop() || "",
+                    ...(repo.trim() ? { repo: repo.trim(), bridge: useForBridge } : {}),
+                }),
+            });
+
+            if (!response.ok) {
+                throw new Error(await readError(response));
+            }
+
+            await waitForServer();
+            window.location.reload();
+        }
+        catch (reason) {
+            setError(reason instanceof Error ? reason.message : String(reason));
+            setSwitching(false);
+        }
+    }
+
     if (!info) {
         return null;
     }
@@ -106,6 +140,54 @@ export function WorkspacePicker() {
                         </button>
                     </form>
 
+                    {!creating && (
+                        <button type="button" className="link-button workspace-new-toggle" onClick={() => setCreating(true)} disabled={switching}>
+                            ＋ Новый проект
+                        </button>
+                    )}
+
+                    {creating && (
+                        <form
+                            className="workspace-create"
+                            onSubmit={event => {
+                                event.preventDefault();
+                                void createProject();
+                            }}
+                        >
+                            <strong>Новый проект</strong>
+                            <label>
+                                <span className="muted">Где создать</span>
+                                <input value={parent} placeholder={parentOf(info.root)} onChange={event => setParent(event.target.value)} disabled={switching} />
+                            </label>
+                            <label>
+                                <span className="muted">Название папки</span>
+                                <input value={name} placeholder={repo.split("/").pop() || "my-app"} onChange={event => setName(event.target.value)} disabled={switching} />
+                            </label>
+                            <label>
+                                <span className="muted">Репозиторий GitHub (владелец/имя) — необязательно: пусто — пустой проект с git</span>
+                                <input value={repo} placeholder="koolo4/new-site" onChange={event => setRepo(event.target.value)} disabled={switching} />
+                            </label>
+                            {repo.trim() && (
+                                <label className="checkbox-label">
+                                    <input type="checkbox" checked={useForBridge} onChange={event => setUseForBridge(event.target.checked)} disabled={switching} />
+                                    <span className="muted">Брать задачи моста GitHub из этого репозитория</span>
+                                </label>
+                            )}
+                            {repo.trim() && (
+                                <p className="muted workspace-hint">
+                                    Репозиторий сначала создайте на GitHub (лучше приватный, с README) и дайте к нему доступ токену
+                                    (GitHub → Settings → Developer settings → Fine-grained tokens → ваш токен → Repository access).
+                                </p>
+                            )}
+                            <div className="workspace-create-actions">
+                                <button className="secondary-button" type="submit" disabled={switching || (!name.trim() && !repo.trim())}>
+                                    {switching ? "Создаю…" : repo.trim() ? "Клонировать и открыть" : "Создать и открыть"}
+                                </button>
+                                <button type="button" className="link-button" onClick={() => setCreating(false)} disabled={switching}>отмена</button>
+                            </div>
+                        </form>
+                    )}
+
                     {error && <div className="error">{error}</div>}
 
                     {info.recent.filter(item => item !== info.root).length > 0 && (
@@ -126,4 +208,12 @@ export function WorkspacePicker() {
             )}
         </div>
     );
+}
+
+/** Папка, в которой лежит текущий проект — по умолчанию новый создаётся рядом. */
+function parentOf(root: string): string {
+    const parts = root.split(/[\\/]+/).filter(Boolean);
+    if (parts.length <= 1) return root;
+    const separator = root.includes("\\") ? "\\" : "/";
+    return `${root.startsWith("/") ? "/" : ""}${parts.slice(0, -1).join(separator)}`;
 }
