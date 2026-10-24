@@ -476,6 +476,31 @@ describe.skipIf(!git.available)("GitHubTaskRunner", () => {
         expect(run(root, "status", "--porcelain", "--", ".", ":(exclude).justai").trim()).toBe("");
     }, 90_000);
 
+    it("writes the bridge feed: task, start, done, waiting, merged", async () => {
+        const events: Array<{ kind: string; issue?: number; text: string }> = [];
+        const bridge = new GitHubTaskRunner({
+            client: github as unknown as GitHubClient,
+            git,
+            sessions,
+            permissions: new PermissionService({ rulesFile: path.join(root, ".justai", "p9.json"), emit: () => undefined }),
+            workspaceRoot: root,
+            feed: { add: event => events.push(event) },
+            config: { label: "justai", allowedUsers: [], profile: "coder", provider: "mock", pollMs: 60_000, allowPublic: false, token: "" },
+        });
+        github.onMerge = head => run(remote, "update-ref", "refs/heads/main", `refs/heads/${head}`);
+
+        github.issue(90, "создай файл feed.txt");
+        github.issue(91, "создай файл next.txt", "me", { body: "Depends on #90" });
+        await bridge.check();
+        await bridge.check();
+        github.comments.get(90)!.push({ id: 900, author: "me", body: "/justai merge", createdAt: "" });
+        await bridge.check();
+
+        expect(events.map(event => `${event.kind}#${event.issue}`)).toEqual(["task#90", "start#90", "done#90", "waiting#91", "merged#90"]);
+        expect(events[0]!.text).toContain("Задача от me");
+        expect(events[2]!.text).toContain("Готово → PR 100");
+    }, 90_000);
+
     it("waits for dependencies, merges on «/justai merge» and then starts the dependent task", async () => {
         github.onMerge = head => run(remote, "update-ref", "refs/heads/main", `refs/heads/${head}`);
         github.issue(80, "создай файл base.txt");

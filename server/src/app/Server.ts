@@ -274,6 +274,48 @@ export class Server {
             res.status(202).json(runner.getStatus());
         });
 
+        // Лента моста: события всех задач по порядку (after — id последнего полученного события).
+        this.app.get('/api/github/feed', (req, res, next) => {
+            const log = this.container.bridgeLog;
+
+            if (!log) {
+                res.json({ events: [] });
+                return;
+            }
+
+            log.list({
+                ...(typeof req.query.after === 'string' ? { after: req.query.after } : {}),
+                ...(Number(req.query.limit) > 0 ? { limit: Number(req.query.limit) } : {}),
+            }).then(events => res.json({ events }), next);
+        });
+
+        // Сообщение из ленты: комментарий в задачу (как от владельца токена — мост примет его как указание)
+        // или, без номера, новая задача.
+        this.app.post('/api/github/message', (req, res, next) => {
+            void (async () => {
+                const client = this.container.githubClient;
+                const body = req.body as { issue?: unknown; text?: unknown };
+                const text = typeof body.text === 'string' ? body.text.trim() : '';
+                const issue = typeof body.issue === 'number' && Number.isInteger(body.issue) && body.issue > 0 ? body.issue : undefined;
+
+                if (!client) throw new BadRequestError('GitHub is not configured: set the token and repository in Settings → GitHub.');
+                if (!text || text.length > 30_000) throw new BadRequestError('Pass the message as "text" (1–30 000 characters).');
+
+                if (issue) {
+                    await client.comment(issue, text, false);
+                    this.container.bridgeLog?.add({ kind: 'note', issue, text: `Вы: ${text.slice(0, 600)}` });
+                    res.json({ issue, url: `https://github.com/${client.repo}/issues/${issue}` });
+                    return;
+                }
+
+                const label = this.container.githubTaskLabel;
+                const title = text.split('\n')[0]!.slice(0, 120);
+                const created = await client.createIssue(title, `${text}\n\n/${label}`, [label]);
+                this.container.bridgeLog?.add({ kind: 'note', issue: created.number, url: created.url, text: `Вы поставили задачу: ${title}` });
+                res.json({ issue: created.number, url: created.url });
+            })().catch(next);
+        });
+
         // Подключённые MCP-серверы и их инструменты.
         this.app.get(
             '/api/agent/mcp',

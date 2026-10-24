@@ -39,6 +39,13 @@ const STEP_SCHEMAS = {
     screenshot: z.union([z.string().min(1), z.object({ name: z.string().min(1), width: z.number().int().min(320).max(2560).optional(), fullPage: z.boolean().optional() })]),
     viewport: z.object({ width: z.number().int().min(320).max(2560), height: z.number().int().min(320).max(2560).optional() }),
     expectNoConsoleErrors: z.union([z.boolean(), z.null()]),
+    /** Настольная Windows-программа: запустить, дождаться окна с таким заголовком, снять только его, закрыть. */
+    window: z.object({
+        command: z.string().min(1),
+        title: z.string().min(1),
+        name: z.string().min(1).optional(),
+        waitSec: z.number().int().min(1).max(120).optional(),
+    }),
     run: z.union([z.string().min(1), z.object({
         command: z.string().min(1),
         expectExit: z.number().int().optional(),

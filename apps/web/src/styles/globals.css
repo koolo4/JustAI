@@ -1200,3 +1200,126 @@ button {
         grid-template-columns: minmax(0, 1fr);
     }
 }
+
+/* Вкладки панели агента: лента моста и чат. */
+.agent-tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 10px;
+    border-bottom: 1px solid #242a32;
+}
+
+.agent-tabs button {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: #8e9aa8;
+    padding: 6px 10px;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.agent-tabs button.active {
+    color: #e8edf2;
+    border-bottom-color: #4fd1c5;
+}
+
+/* Свёрнутые параметры сессии: одна строка вместо четырёх полей. */
+.session-settings-toggle {
+    display: block;
+    width: 100%;
+    margin-top: 8px;
+    padding: 6px 8px;
+    text-align: left;
+    background: #151a20;
+    border: 1px solid #2b333d;
+    border-radius: 6px;
+    color: #c8d1db;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+/* Лента моста. */
+.bridge-feed {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+
+.bridge-feed__toolbar {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    padding: 8px 0;
+}
+
+.bridge-feed__toolbar select,
+.bridge-feed__target select {
+    background: #171c22;
+    color: #e8edf2;
+    border: 1px solid #303842;
+    padding: 5px 8px;
+    max-width: 60%;
+}
+
+.bridge-feed__events {
+    flex: 1;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 4px 0 12px;
+}
+
+.bridge-event {
+    display: grid;
+    grid-template-columns: 44px 22px minmax(0, 1fr);
+    gap: 6px;
+    padding: 7px 8px;
+    border-radius: 7px;
+    background: #151a20;
+    font-size: 13px;
+}
+
+.bridge-event__time { color: #8e9aa8; font-size: 12px; padding-top: 1px; }
+.bridge-event__head { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
+.bridge-event__head a { font-size: 12px; }
+.bridge-event__text { margin-top: 2px; color: #c8d1db; white-space: pre-wrap; word-break: break-word; line-height: 1.4; }
+
+.bridge-event--task, .bridge-event--feedback, .bridge-event--note { background: #16283e; }
+.bridge-event--done, .bridge-event--merged { background: #15261f; }
+.bridge-event--failed, .bridge-event--error { background: #2a1618; }
+.bridge-event--gap, .bridge-event--waiting, .bridge-event--paused { background: #2a2518; }
+
+.bridge-event__steps {
+    list-style: none;
+    margin: 6px 0 0;
+    padding: 6px 8px;
+    background: #0f1317;
+    border-radius: 6px;
+    font-size: 12px;
+}
+
+.bridge-event__steps li { display: flex; gap: 6px; flex-wrap: wrap; padding: 1px 0; }
+.bridge-event__steps li.running { color: #4fd1c5; }
+.bridge-event__steps li.error { color: #f6c1c1; }
+
+.bridge-feed__composer {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    border-top: 1px solid #242a32;
+    padding-top: 8px;
+}
+
+.bridge-feed__target { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+.bridge-feed__composer textarea {
+    background: #0c0f12;
+    color: #fff;
+    border: 1px solid #303842;
+    border-radius: 8px;
+    padding: 8px;
+    resize: vertical;
+}

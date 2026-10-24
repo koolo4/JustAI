@@ -10,6 +10,7 @@ import type { PermissionService } from "../agent/permissions/PermissionService.j
 import type { SessionManager } from "../agent/runtime/SessionManager.js";
 import type { VerificationOutcome, Verifier } from "../agent/runtime/Verifier.js";
 import type { BrowserService } from "../../infrastructure/browser/BrowserService.js";
+import type { BridgeEvent } from "./BridgeLog.js";
 import { AppManager, type RunningApp } from "./e2e/AppManager.js";
 import { e2eReport, runScenario, type E2EResult } from "./e2e/E2ERunner.js";
 import { parseScenario, scenarioBlock, ScenarioError, type Scenario } from "./e2e/scenario.js";
@@ -141,6 +142,13 @@ export class GitHubTaskRunner {
     /** Приложение проекта для проверок («/justai app», «/justai e2e»). */
     private readonly apps?: AppManager;
 
+    private lastTickAt = 0;
+
+    /** Событие в ленту моста. */
+    private note(event: Omit<BridgeEvent, "id" | "time">): void {
+        this.deps.feed?.add(event);
+    }
+
     /** Причина отказа для разрушительной команды (как у агента), иначе null. */
     private async dangerReason(command: string): Promise<string | null> {
         const classification = classifyCommand(command, await this.deps.permissions.readRules());
@@ -168,6 +176,8 @@ export class GitHubTaskRunner {
             browser?: { close(sessionId: string): Promise<unknown> };
             /** Браузер для сценариев «/justai e2e» (выполняются без модели). */
             e2eBrowser?: BrowserService;
+            /** Лента моста: события для интерфейса. */
+            feed?: { add(event: Omit<BridgeEvent, "id" | "time">): unknown };
             /** Не давать компьютеру уснуть, пока идёт работа (см. config.keepAwake). */
             keepAwake?: { acquire(): () => void };
             log?: (message: string) => void;
@@ -217,6 +227,8 @@ export class GitHubTaskRunner {
     public check(): Promise<void> {
         this.running ??= this.tick()
             .catch(error => {
+                // Одну и ту же ошибку (нет сети, публичный репозиторий) в ленту — один раз, а не каждую минуту.
+                if (this.status.lastError !== message(error)) this.note({ kind: "error", text: message(error) });
                 this.status = { ...this.status, state: "error", lastError: message(error) };
                 this.deps.log?.(`[github] ${message(error)}`);
             })
@@ -229,6 +241,14 @@ export class GitHubTaskRunner {
 
     private async tick(): Promise<void> {
         const { client, config } = this.deps;
+        const now = Date.now();
+
+        // Пропуск опросов дольше трёх интервалов — ПК спал или JustAI был остановлен: в ленте это видно.
+        if (this.lastTickAt && now - this.lastTickAt > Math.max(3 * config.pollMs, 3 * 60_000)) {
+            this.note({ kind: "gap", text: `Мост не опрашивал GitHub с ${clock(this.lastTickAt)} до ${clock(now)} (ПК спал или JustAI был остановлен).` });
+        }
+
+        this.lastTickAt = now;
         this.status = { ...this.status, lastCheck: new Date().toISOString() };
 
         if (!config.allowPublic && !(await client.isPrivate())) {
@@ -380,6 +400,7 @@ export class GitHubTaskRunner {
                 closed.push(number);
             }
 
+            this.note({ kind: "command", issue: issue.number, text: closed.length ? `Закрыты ${closed.map(number => `#${number}`).join(", ")}` : "Закрывать нечего" });
             await this.soft(client.comment(issue.number, [
                 closed.length ? `✅ **JustAI**: закрыты ${closed.map(number => `#${number}`).join(", ")}.` : "**JustAI**: ничего не закрыто.",
                 ...skipped.map(item => `- не закрыт ${item}`),
@@ -424,6 +445,7 @@ export class GitHubTaskRunner {
                     if (state.waiting?.[issue.number]?.join() !== waiting.join()) {
                         state.waiting = { ...state.waiting, [issue.number]: waiting };
                         await this.save(state);
+                        this.note({ kind: "waiting", issue: issue.number, title: cleanTitle(issue.title, config.label), url: issue.url, text: `ждёт ${waiting.map(number => `#${number}`).join(", ")}` });
                         await this.soft(client.comment(issue.number,
                             `⏳ **JustAI**: задача ждёт ${waiting.map(number => `#${number}`).join(", ")} — начну, когда ${waiting.length > 1 ? "они будут слиты" : "она будет слита"} (issue закроется).`), "comments");
                     }
@@ -512,6 +534,10 @@ export class GitHubTaskRunner {
 
         this.status = { ...this.status, state: "working", currentIssue: issue.number, lastError: undefined, warning: undefined };
         this.deps.log?.(`[github] issue #${issue.number}: ${feedback.length ? "feedback" : "new task"} → ${branch}`);
+        const title = cleanTitle(issue.title, config.label);
+        this.note(feedback.length
+            ? { kind: "feedback", issue: issue.number, title, url: issue.url, text: clip(feedback.map(item => item.body.trim()).join("\n\n"), 600) }
+            : { kind: "task", issue: issue.number, title, url: issue.url, text: `${kind === "test" ? "Проверка" : "Задача"} от ${issue.author}: ${clip(stripCommands(issue.body, config.label) || "(без описания)", 600)}` });
 
         await this.soft(client.addLabels(issue.number, [LABELS.working]), "labels");
         await this.soft(client.removeLabel(issue.number, LABELS.review), "labels");
@@ -563,6 +589,7 @@ export class GitHubTaskRunner {
             const prompt = feedback.length ? feedbackPrompt(issue, feedback, branch)
                 : kind === "test" ? testPrompt(issue, branch, config.label) : taskPrompt(issue, branch, config.label);
             await sessions.send(task.sessionId, { text: prompt });
+            this.note({ kind: "start", issue: issue.number, title, sessionId: task.sessionId, text: `Выполняю в ветке ${branch}${kind === "test" ? " (проверка, файлы не меняются)" : ""}` });
 
             // Пока агент работает: живой отчёт в issue и проверка команды «/justai stop».
             const watch = await this.watch(issue, task, startIndex, state);
@@ -609,6 +636,7 @@ export class GitHubTaskRunner {
                     "_To continue, reply in this issue with instructions (or create an issue with `/justai continue #" + issue.number + "`). JustAI resumes in the same session._",
                 ].join("\n")), "comments");
                 await this.soft(client.addLabels(issue.number, [LABELS.paused]), "labels");
+                this.note({ kind: "paused", issue: issue.number, title, sessionId: task.sessionId, ...(task.pullRequest ? { url: task.pullRequest } : {}), text: `Остановлено по команде. ${committed ? "Сделанное сохранено в ветке." : "Изменений не было."}` });
                 return;
             }
 
@@ -638,9 +666,22 @@ export class GitHubTaskRunner {
             ].join("\n")), "comments");
 
             await this.soft(client.addLabels(issue.number, [ok ? LABELS.review : LABELS.failed]), "labels");
+            this.note({
+                kind: ok ? "done" : "failed",
+                issue: issue.number,
+                title,
+                sessionId: task.sessionId,
+                ...(task.pullRequest ? { url: task.pullRequest } : {}),
+                text: [
+                    ok ? `Готово${task.pullRequest ? ` → PR ${task.pullRequest.split("/").pop()}` : ""}` : `Не удалось${details.session.lastError ? `: ${details.session.lastError}` : ""}`,
+                    checks ? `проверки ${checks.status === "passed" ? "✓" : checks.status === "failed" ? "✕" : "—"}` : "",
+                    stat ? `изменено: ${stat.split("\n").at(-1)!.trim()}` : "файлы не менялись",
+                ].filter(Boolean).join(" · "),
+            });
         }
         catch (error) {
             task.status = "failed";
+            this.note({ kind: "failed", issue: issue.number, title, ...(task.sessionId ? { sessionId: task.sessionId } : {}), text: `Ошибка: ${clip(message(error), 300)}` });
             this.status = { ...this.status, state: "error", lastError: message(error) };
             await client.comment(issue.number, `⚠️ **JustAI** failed: ${clip(message(error), 1_000)}`).catch(() => undefined);
             await client.addLabels(issue.number, [LABELS.failed]).catch(() => undefined);
@@ -712,6 +753,13 @@ export class GitHubTaskRunner {
             `_Проверить ещё раз или иначе — комментарий с указаниями в этом issue. Выполнить команду: \`/${config.label} run <команда>\`._`,
         ].join("\n")), "comments");
         await this.soft(client.addLabels(issue.number, [passed ? LABELS.review : LABELS.failed]), "labels");
+        this.note({
+            kind: passed ? "done" : "failed",
+            issue: issue.number,
+            title: cleanTitle(issue.title, config.label),
+            sessionId: task.sessionId,
+            text: `Проверка: ${passed ? "PASS" : "FAIL"} · действий ${evidence.actions}, скриншотов ${evidence.screenshots}${evidence.problem ? ` · ${evidence.problem}` : ""}`,
+        });
     }
 
     /**
@@ -756,6 +804,7 @@ export class GitHubTaskRunner {
             const result = await processes.run(command, { cwd: this.deps.workspaceRoot, owner: RUN_OWNER, timeoutMs: limit, signal: this.aborter.signal });
             const ok = result.info.status === "exited" && result.info.exitCode === 0;
             const outcome = result.info.status === "timed_out" ? `не уложилась в ${Math.round(limit / 1000)} с` : `код выхода ${result.info.exitCode ?? "—"}`;
+            this.note({ kind: "command", issue: postTo, text: `${ok ? "✓" : "✕"} ${command} (${target}) — ${outcome}` });
 
             await this.soft(client.comment(postTo, [
                 `▶ **JustAI** выполнил ${code(command)} в ветке \`${target}\` (коммит ${commit})`,
@@ -834,6 +883,7 @@ export class GitHubTaskRunner {
             await client.mergePullRequest(pullNumber, `JustAI: ${cleanTitle((await client.getIssue(issueNumber)).title, config.label)} (#${issueNumber})`, config.mergeMethod ?? "squash");
 
             task.status = "merged";
+            this.note({ kind: "merged", issue: issueNumber, ...(task.pullRequest ? { url: task.pullRequest } : {}), text: `Слито в ${base}${checks ? ` · проверки ${checks.status === "passed" ? "✓" : "—"}` : ""}` });
             await this.soft(client.removeLabel(issueNumber, LABELS.review), "labels");
             await this.soft(client.addLabels(issueNumber, [LABELS.merged]), "labels");
             await this.soft(client.comment(issueNumber, [
@@ -970,6 +1020,7 @@ export class GitHubTaskRunner {
 
         try {
             const app = await this.apps.start(target);
+            this.note({ kind: "command", issue: postTo, text: `Приложение запущено: ${app.branch} (${app.commit}), ${app.how}, ${app.url}` });
             await say([
                 `▶ **JustAI**: приложение запущено — ветка \`${app.branch}\` (коммит ${app.commit}), ${app.how}.`,
                 note,
@@ -1074,6 +1125,12 @@ export class GitHubTaskRunner {
                 });
                 apps.touch();
                 passed &&= result.passed;
+                const failedStep = result.steps.find(step => !step.ok);
+                this.note({
+                    kind: "command",
+                    issue: postTo,
+                    text: `e2e «${entry.label}» (${app.branch}): ${result.passed ? "PASS" : "FAIL"} — ${result.steps.filter(step => step.ok).length}/${result.steps.length} шагов${failedStep ? `, упал: ${failedStep.label} — ${failedStep.error ?? ""}` : ""}`,
+                });
                 await this.publishE2E(postTo, entry.label, result, `ветка \`${app.branch}\` (коммит ${app.commit}), ${app.how}${note ? `. ${note}` : ""}`);
             }
         }
@@ -1207,6 +1264,7 @@ export class GitHubTaskRunner {
             }
 
             this.deps.log?.(`[github] issue #${issue.number}: stop requested`);
+            this.note({ kind: "stop-request", issue: issue.number, text: "Получена команда остановки — прерываю агента." });
             await sessions.stop(task.sessionId);
         };
 
@@ -1628,6 +1686,10 @@ export function isStopCommand(body: string, label: string): boolean {
 /** Текст правки без служебных строк «/justai …». */
 export function stripCommands(body: string, label: string): string {
     return body.replace(new RegExp(`^\\s*/${escapeRegExp(label)}\\b.*$`, "gim"), "").trim();
+}
+
+function clock(time: number): string {
+    return new Date(time).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
 }
 
 function escapeRegExp(text: string): string {

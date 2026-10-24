@@ -54,6 +54,7 @@ import { CompletionService } from "../modules/completion/CompletionService.js";
 import { GitHubClient } from "../modules/github/GitHubClient.js";
 import { GitHubTaskRunner } from "../modules/github/GitHubTaskRunner.js";
 import { KeepAwake, keepAwakeModeFromEnv } from "../infrastructure/power/KeepAwake.js";
+import { BridgeLog } from "../modules/github/BridgeLog.js";
 import { createGitHubTools } from "../modules/agent/tools/githubTools.js";
 import { createShellTools } from "../modules/agent/tools/shellTools.js";
 import { ProcessManager } from "../infrastructure/process/ProcessManager.js";
@@ -117,6 +118,13 @@ export class Container {
 
     /** Клиент GitHub, если заданы JUSTAI_GITHUB_TOKEN и JUSTAI_GITHUB_REPO. */
     public readonly githubClient: GitHubClient | null = createGitHubClient();
+
+    /** Лента моста (события задач для интерфейса); создаётся вместе с исполнителем задач. */
+    public bridgeLog?: BridgeLog;
+
+    public get githubTaskLabel(): string {
+        return githubLabel();
+    }
 
     /** Исполнитель задач из GitHub (JUSTAI_GITHUB_RUNNER=on). */
     public githubRunner?: GitHubTaskRunner;
@@ -431,6 +439,7 @@ export class Container {
 
         // Мост GitHub: задачи из issues выполняет этот компьютер.
         if (this.githubClient && process.env.JUSTAI_GITHUB_RUNNER === "on") {
+            this.bridgeLog = BridgeLog.inWorkspace(this.workspaceRoot);
             this.githubRunner = new GitHubTaskRunner({
                 client: this.githubClient,
                 git: this.gitService,
@@ -442,6 +451,7 @@ export class Container {
                 browser: this.browserService,
                 keepAwake: this.keepAwake,
                 e2eBrowser: this.browserService,
+                feed: this.bridgeLog,
                 config: {
                     ...(Number(process.env.JUSTAI_APP_IDLE_MIN) > 0 ? { appIdleMinutes: Number(process.env.JUSTAI_APP_IDLE_MIN) } : {}),
                     keepAwake: keepAwakeModeFromEnv(process.env.JUSTAI_KEEP_AWAKE),

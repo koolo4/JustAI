@@ -3,6 +3,7 @@ import type { Page } from "playwright";
 import { isLocalUrl, type BrowserService, type ConsoleEntry } from "../../../infrastructure/browser/BrowserService.js";
 import type { ProcessManager } from "../../../infrastructure/process/ProcessManager.js";
 import { describeStep, type Scenario, type ScenarioStep } from "./scenario.js";
+import { captureWindow, closeWindowProcess } from "./windowCapture.js";
 
 const ACTION_TIMEOUT_MS = 10_000;
 const EXPECT_TIMEOUT_MS = 5_000;
@@ -247,6 +248,36 @@ async function runStep(step: ScenarioStep, page: Page, log: ConsoleEntry[], scre
             const problems = log.filter(isProblem);
             if (problems.length) throw new Error(problems.slice(0, 5).map(entry => `[${entry.type}] ${clip(entry.text, 200)}`).join("; "));
             return "clean";
+        }
+
+        case "window": {
+            if (!options.processes || !options.cwd) throw new Error("commands are not available here");
+
+            const { command, title, name, waitSec } = step.value;
+            const refused = await options.isDangerous?.(command);
+            if (refused) throw new Error(`refused: ${refused}`);
+
+            const startedAt = new Date(Date.now() - 1_000);
+            const info = options.processes.start(command, { cwd: options.cwd, owner: "github-e2e" });
+            const deadline = Date.now() + (waitSec ?? 15) * 1000;
+            let shot: Awaited<ReturnType<typeof captureWindow>> = null;
+
+            try {
+                while (!shot && Date.now() < deadline) {
+                    await new Promise(resolve => setTimeout(resolve, 1_000));
+                    shot = await captureWindow(title, startedAt);
+                }
+            }
+            finally {
+                if (shot) await closeWindowProcess(shot.pid);
+                await options.processes.kill(info.id).catch(() => undefined);
+            }
+
+            if (!shot) throw new Error(`no window titled like "${title}" appeared within ${waitSec ?? 15} s`);
+
+            const image = Buffer.from(shot.png, "base64");
+            screenshots.push({ name: name ?? "window", width: image.length > 24 ? image.readUInt32BE(16) : 0, dataBase64: shot.png, diff: null });
+            return `window "${clip(shot.windowTitle, 60)}"`;
         }
 
         case "run": {

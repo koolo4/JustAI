@@ -18,6 +18,8 @@ import type {
 import { useIDEContext } from "../context/useIDEContext";
 import { useAgentSession, type ToolProgress } from "../hooks/useAgentSession";
 import { deleteSession, fetchProfiles, fetchProviders, fetchSessions } from "../services/agentApi";
+import { apiFetch } from "../services/http";
+import { BridgeFeed } from "./BridgeFeed";
 import { GitHubActivity } from "./GitHubActivity";
 import { IntegrationCard } from "./IntegrationCard";
 import { MentionTextarea } from "./MentionTextarea";
@@ -46,8 +48,34 @@ export function AgentChat({ onReview }: { onReview?: (request: ReviewRequest) =>
     const verifyEnabled = agent.session?.verify ?? verify;
     const [prompt, setPrompt] = useState("");
     const [loadError, setLoadError] = useState("");
+    // Мост GitHub включён на этом ПК — основной экран «Лента моста», чат — второй вкладкой.
+    const [bridgeEnabled, setBridgeEnabled] = useState(false);
+    const [storedView, setStoredView] = useState<AgentView | null>(readView);
+    const [showSettings, setShowSettings] = useState(false);
+    const view: AgentView = bridgeEnabled ? storedView ?? "feed" : "chat";
 
     const running = agent.session?.status === "running";
+
+    // Перепроверка раз в 10 с: сервер мог перезапускаться, а мост — включиться в настройках.
+    useEffect(() => {
+        const load = () => apiFetch("/github/status")
+            .then(async response => response.ok && setBridgeEnabled((await response.json() as { runner: unknown }).runner !== null))
+            .catch(() => undefined);
+
+        void load();
+        const timer = window.setInterval(() => void load(), 10_000);
+        return () => window.clearInterval(timer);
+    }, []);
+
+    function switchView(next: AgentView) {
+        setStoredView(next);
+        try {
+            window.localStorage.setItem(VIEW_KEY, next);
+        }
+        catch {
+            // хранилище недоступно — вкладка просто не запомнится
+        }
+    }
 
     useEffect(() => {
         Promise.all([fetchProviders(), fetchProfiles(), fetchSessions()])
@@ -120,6 +148,18 @@ export function AgentChat({ onReview }: { onReview?: (request: ReviewRequest) =>
     return (
         <div className="ai-chat">
             <div className="ai-header">
+                {bridgeEnabled && (
+                    <div className="agent-tabs" role="tablist">
+                        <button role="tab" aria-selected={view === "feed"} className={view === "feed" ? "active" : ""} onClick={() => switchView("feed")}>
+                            🔗 Лента моста
+                        </button>
+                        <button role="tab" aria-selected={view === "chat"} className={view === "chat" ? "active" : ""} onClick={() => switchView("chat")}>
+                            💬 Чат
+                        </button>
+                    </div>
+                )}
+
+                {view === "chat" && <>
                 <div className="ai-title-row">
                     <div>
                         <h2>Agent</h2>
@@ -188,7 +228,21 @@ export function AgentChat({ onReview }: { onReview?: (request: ReviewRequest) =>
                     />
                 )}
 
-                <div className="ai-selects">
+                {/* Параметры сессии свёрнуты в одну строку: при работе через мост они не нужны и мешают диалогу. */}
+                <button
+                    type="button"
+                    className="session-settings-toggle"
+                    aria-expanded={showSettings}
+                    onClick={() => setShowSettings(value => !value)}
+                >
+                    ⚙ {profiles.find(item => item.id === (agent.session?.profile ?? profile))?.label ?? profile}
+                    {" · "}{providers.find(item => item.id === (agent.session?.provider ?? provider))?.label ?? provider}
+                    {" · "}{MODE_SHORT[agent.session?.mode ?? mode]}
+                    {verifyEnabled ? " · автопроверка" : ""}
+                    <span className="muted">{showSettings ? " ▾" : " ▸"}</span>
+                </button>
+
+                {showSettings && <div className="ai-selects">
                     <label>
                         <span className="muted">Profile</span>
                         <select
@@ -264,15 +318,27 @@ export function AgentChat({ onReview }: { onReview?: (request: ReviewRequest) =>
                         <span className="muted">Auto-check after changes</span>
                     </label>
 
-                </div>
+                </div>}
 
                 <IntegrationCard />
 
                 {(loadError || agent.error) && (
                     <div className="error">{agent.error || loadError}</div>
                 )}
+                </>}
             </div>
 
+            {view === "feed" && (
+                <BridgeFeed
+                    onOpenSession={id => {
+                        void agent.open(id);
+                        switchView("chat");
+                        fetchSessions().then(setSessions).catch(() => undefined);
+                    }}
+                />
+            )}
+
+            {view === "chat" && <>
             {agent.todos.length > 0 && <TodoList todos={agent.todos} />}
 
             <div className="ai-messages" ref={scrollRef}>
@@ -386,9 +452,30 @@ export function AgentChat({ onReview }: { onReview?: (request: ReviewRequest) =>
                     </button>
                 )}
             </div>
+            </>}
         </div>
     );
 }
+
+type AgentView = "feed" | "chat";
+
+const VIEW_KEY = "justai.agentView";
+
+function readView(): AgentView | null {
+    try {
+        const value = window.localStorage.getItem(VIEW_KEY);
+        return value === "feed" || value === "chat" ? value : null;
+    }
+    catch {
+        return null;
+    }
+}
+
+const MODE_SHORT: Record<PermissionMode, string> = {
+    ask: "спрашивать",
+    "auto-edit": "авто-правки",
+    "full-auto": "полный авто",
+};
 
 function MessageView({
     message,

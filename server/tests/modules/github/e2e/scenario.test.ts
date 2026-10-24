@@ -20,6 +20,12 @@ describe("e2e scenarios", () => {
         expect(describeStep(scenario.steps[2]!)).toBe("expectText `#kicker` → \"Раунд 1\"");
     });
 
+    it("describes a desktop window step", () => {
+        const [step] = parseScenario("steps:\n  - window: { command: dist/app.exe, title: 'Калькулятор', name: main, waitSec: 10 }").steps;
+        expect(step).toEqual({ kind: "window", value: { command: "dist/app.exe", title: "Калькулятор", name: "main", waitSec: 10 } });
+        expect(() => parseScenario("steps:\n  - window: { command: app.exe }")).toThrow(/title/);
+    });
+
     it("accepts JSON too", () => {
         expect(parseScenario('{"steps":[{"press":"Escape"},{"wait":200}]}').steps).toEqual([
             { kind: "press", value: "Escape" },
