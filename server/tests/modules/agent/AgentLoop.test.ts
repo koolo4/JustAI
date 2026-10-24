@@ -223,6 +223,16 @@ describe("AgentLoop", () => {
         expect(provider.requests).toHaveLength(11);
     });
 
+    it("stops with an error when the model keeps replying empty, naming the real tools", async () => {
+        // Так выглядит вызов несуществующего инструмента через Ollama: ответ просто пустой.
+        const { loop, saved } = setup(() => ({ text: "" }));
+
+        const result = await loop.run([createMessage("user", [{ type: "text", text: "check the page" }])]);
+
+        expect(result).toMatchObject({ status: "failed", reason: expect.stringContaining("empty replies") });
+        expect(saved.find(message => message.role === "user")!.content[0]).toMatchObject({ type: "text", text: expect.stringMatching(/use only these tools: .*echo/) });
+    });
+
     it("does not treat an empty reply as finished", async () => {
         const { loop, user, saved, provider } = setup([
             { text: "" },

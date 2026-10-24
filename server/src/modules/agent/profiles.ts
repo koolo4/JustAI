@@ -11,7 +11,7 @@ export interface AgentProfile extends AgentProfileInfo {
 
 /** Проверка интерфейса без действий на странице. */
 const BROWSER_READ_TOOLS = ["browser_open", "browser_text", "browser_console", "browser_screenshot", "browser_close"];
-const BROWSER_TOOLS = [...BROWSER_READ_TOOLS, "browser_click", "browser_type"];
+const BROWSER_TOOLS = [...BROWSER_READ_TOOLS, "browser_click", "browser_type", "browser_evaluate"];
 
 const CODE_TOOLS = [
     "todo_write", "read_file", "list_dir", "glob", "grep", "search_code", "edit_file", "write_file", "diagnostics", "mcp__*",

@@ -89,11 +89,22 @@ describe("browser tools", () => {
         expect(tools.get("browser_click")!.changesFiles).toBe(false);
     }, 60_000);
 
+    it("evaluates JavaScript on the page: clicks by selector and reads state", async (test) => {
+        if (!available) test.skip();
+
+        await run("browser_evaluate", { code: "document.querySelector('#title').textContent = 'reset'" });
+        expect(await run("browser_evaluate", { code: "document.querySelector('#inc').click(); document.querySelector('#title').textContent" }))
+            .toContain("\"Counter: 1\"");
+        expect(await run("browser_evaluate", { code: "({ items: [1, 2] })" })).toContain("\"items\"");
+        await expect(run("browser_evaluate", { code: "throw new Error('boom')" })).rejects.toThrow(/boom/);
+    }, 60_000);
+
     it("refuses non-local addresses and reports missing elements as tool errors", async (test) => {
         if (!available) test.skip();
 
         await expect(run("browser_open", { url: "https://example.com/" })).rejects.toBeInstanceOf(ToolError);
-        await expect(run("browser_click", { selector: "#does-not-exist" })).rejects.toBeInstanceOf(ToolError);
+        // Ненайденный селектор — ошибка со списком того, что на странице можно нажать.
+        await expect(run("browser_click", { selector: "#does-not-exist" })).rejects.toThrow(/Clickable elements[\s\S]*#inc/);
         expect(await run("browser_close", {})).toBe("Browser page closed.");
     }, 60_000);
 });

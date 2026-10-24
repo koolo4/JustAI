@@ -191,11 +191,21 @@ export class AgentLoop {
                 }
 
                 // Пустой ответ — не «готово»: небольшие модели так иногда отвечают на длинное задание.
-                if (isEmptyReply(turn.content) && turn.stopReason !== "max_tokens" && formatRetries < MAX_FORMAT_RETRIES) {
+                // Частая причина — вызов несуществующего инструмента: Ollama молча выбрасывает такой вызов,
+                // и ответ приходит пустым. Поэтому в подсказке — список настоящих инструментов.
+                if (isEmptyReply(turn.content) && turn.stopReason !== "max_tokens") {
+                    if (formatRetries >= MAX_FORMAT_RETRIES) {
+                        return this.result("failed", "The model kept returning empty replies (often: it tries to call a tool that does not exist).");
+                    }
+
                     formatRetries += 1;
                     await add(createMessage("user", [{
                         type: "text",
-                        text: "[JustAI] Your reply was empty. Do the task now by calling the tools (for example write_file or edit_file), then reply with a short report of what you did.",
+                        text: [
+                            "[JustAI] Your reply was empty, so nothing happened. If you tried to call a tool, it does not exist —",
+                            `use only these tools: ${this.options.tools.map(tool => tool.name).join(", ")}.`,
+                            "Continue the task now with one of them, or, if the task is complete, reply with your report.",
+                        ].join(" "),
                     }]));
                     continue;
                 }

@@ -166,6 +166,49 @@ export function createBrowserTools(browser: BrowserService): Tool[] {
         },
     });
 
+    const evaluate = defineTool({
+        name: "browser_evaluate",
+        description: [
+            "Runs JavaScript in the page opened with browser_open and returns the result as JSON (for example",
+            "\"document.querySelector('#score').textContent\" or \"document.querySelector('.card').click(); document.title\").",
+            "Use it to read state or click elements by selector when browser_click is not enough. Only local pages.",
+        ].join(" "),
+        inputSchema: z.object({
+            code: z.string().min(1).max(5_000).describe("A JavaScript expression or statements; the value of the last expression is returned."),
+        }),
+        kind: "write",
+        changesFiles: false,
+        run: async ({ code }, context) => {
+            const { page } = await browser.page(context.sessionId);
+
+            if (page.url() === "about:blank") {
+                throw new ToolError("No page is open. Call browser_open first.");
+            }
+
+            // Страница могла уйти по ссылке наружу — код выполняется только на локальном адресе.
+            if (!isLocalUrl(page.url())) {
+                throw new ToolError(`The page is now ${page.url()}, not a local address; browser_evaluate only runs on local pages.`);
+            }
+
+            // Как консоль браузера: значение последнего выражения; промис дожидается.
+            const value = await page.evaluate(async (source: string) => {
+                // eslint-disable-next-line no-eval
+                const result: unknown = await (0, eval)(source);
+                try {
+                    return JSON.stringify(result === undefined ? null : result, null, 2) ?? "null";
+                }
+                catch {
+                    return String(result);
+                }
+            }, code).catch(fail);
+
+            await page.waitForLoadState("networkidle", { timeout: 2_000 }).catch(() => undefined);
+            const text = value.length > MAX_TEXT_CHARS ? `${value.slice(0, MAX_TEXT_CHARS)}\n[… truncated]` : value;
+
+            return `Result: ${text}\nPage: ${page.url()}`;
+        },
+    });
+
     const close = defineTool({
         name: "browser_close",
         description: "Closes the browser page of this session.",
@@ -175,7 +218,7 @@ export function createBrowserTools(browser: BrowserService): Tool[] {
             (await browser.close(context.sessionId)) ? "Browser page closed." : "No browser page was open.",
     });
 
-    return [open, screenshot, text, consoleTool, click, type, close];
+    return [open, screenshot, text, consoleTool, click, type, evaluate, close];
 }
 
 /** Видимые кнопки, ссылки и поля: готовый селектор и текст — до 20 штук. */

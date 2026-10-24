@@ -672,9 +672,11 @@ button {
     color: #f6c1c1;
     background: #2a1618;
     border-color: #5c2328;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+}
+
+/* Мост ждёт задачи: плашка остаётся (кнопка «Смотреть последнюю»), но спокойнее. */
+.github-activity.idle:not(.error) {
+    opacity: 0.85;
 }
 
 .github-activity__pulse {

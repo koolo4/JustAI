@@ -50,7 +50,8 @@ describe("KeepAwake", () => {
 
     it("prevents idle sleep on each platform and exits with JustAI", () => {
         const windows = keepAwakeCommand("win32", 4242)!;
-        expect(windows.args.join(" ")).toContain("SetThreadExecutionState([uint32]2147483649)");
+        // Система и экран: на Modern Standby погасший экран усыпляет ноутбук.
+        expect(windows.args.join(" ")).toContain("SetThreadExecutionState([uint32]2147483651)");
         expect(windows.args.join(" ")).toContain("Get-Process -Id 4242");
 
         expect(keepAwakeCommand("darwin", 7)).toEqual({ file: "caffeinate", args: ["-i", "-w", "7"] });

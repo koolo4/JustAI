@@ -2,9 +2,9 @@ import { spawn, type ChildProcess } from "node:child_process";
 
 /**
  * Не даёт компьютеру уснуть, пока идёт работа (задача из GitHub, команда, слияние).
- * Windows — SetThreadExecutionState в отдельном PowerShell (снимается, когда процесс завершается),
- * macOS — caffeinate, Linux — systemd-inhibit. Экран может гаснуть; закрытие крышки и выключение
- * вручную это не отменяет — это настройки электропитания.
+ * Windows — SetThreadExecutionState в отдельном PowerShell (снимается, когда процесс завершается; экран при этом
+ * не гаснет — иначе ноутбук с Modern Standby засыпает), macOS — caffeinate, Linux — systemd-inhibit.
+ * Закрытие крышки и выключение вручную это не отменяет — это настройки электропитания.
  * Процесс-помощник сам завершается, если JustAI упал (следит за PID родителя).
  */
 export class KeepAwake {
@@ -86,12 +86,14 @@ export class KeepAwake {
 /** Команда, которая держит систему бодрой, пока жива (и пока жив процесс parentPid). */
 export function keepAwakeCommand(platform: NodeJS.Platform, parentPid: number): { file: string; args: string[] } | null {
     if (platform === "win32") {
-        // ES_CONTINUOUS | ES_SYSTEM_REQUIRED = 0x80000001: не засыпать от бездействия. Повторяется каждые 30 с.
+        // ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED = 0x80000003. Экран тоже держим включённым:
+        // на ноутбуках с «современным ждущим режимом» (S0 Low Power Idle) погасший экран сразу усыпляет систему,
+        // и одного ES_SYSTEM_REQUIRED недостаточно (так мост молчал 34 минуты). Повторяется каждые 30 с.
         const script = [
             "$sig = '[DllImport(\"kernel32.dll\")] public static extern uint SetThreadExecutionState(uint flags);'",
             "$api = Add-Type -MemberDefinition $sig -Name Power -Namespace JustAI -PassThru",
             `while (Get-Process -Id ${parentPid} -ErrorAction SilentlyContinue) {`,
-            "  [void]$api::SetThreadExecutionState([uint32]2147483649)",
+            "  [void]$api::SetThreadExecutionState([uint32]2147483651)",
             "  Start-Sleep -Seconds 30",
             "}",
         ].join("\n");

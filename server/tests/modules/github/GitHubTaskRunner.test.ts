@@ -588,6 +588,16 @@ describe.skipIf(!git.available)("GitHubTaskRunner", () => {
         expect(github.comments.get(71)![0]!.body).toContain("ветке `main`");
         expect(github.comments.get(71)![0]!.body).toContain("нет (задача слита");
 
+        // Между задачами «Смотреть» ведёт в последнюю сессию моста.
+        expect(bridge.getStatus()).toMatchObject({ state: "idle", lastIssue: 70, lastSessionId: expect.any(String) });
+
+        // «/justai status» — мост на связи и что в очереди.
+        github.issue(72, "Status", "me", { labels: [], body: "/justai status" });
+        await bridge.check();
+        expect(github.comments.get(72)![0]!.body).toContain("на связи");
+        expect(github.comments.get(72)![0]!.body).toContain("готов PR: #70");
+        expect(github.closed).toContain(72);
+
         // Пока шли задача и команда, компьютер держали бодрым; после — отпустили.
         expect(awake.total).toBe(2);
         expect(awake.held).toBe(0);

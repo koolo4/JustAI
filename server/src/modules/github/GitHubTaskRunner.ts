@@ -53,6 +53,9 @@ export interface GitHubRunnerStatus {
     currentIssue?: number;
     /** Сессия, в которой сейчас работает исполнитель (её можно открыть в интерфейсе и смотреть шаги). */
     currentSessionId?: string;
+    /** Последняя сессия моста и её задача — чтобы посмотреть, что было, когда мост уже ждёт. */
+    lastSessionId?: string;
+    lastIssue?: number;
     lastCheck?: string;
     lastError?: string;
     /** Задачи выполняются, но что-то второстепенное не работает (например, нет прав на метки). */
@@ -220,6 +223,23 @@ export class GitHubTaskRunner {
         // Зависимость выполнена, когда её issue закрыт (слияние PR «Closes #N» закрывает его само).
         const openNumbers = new Set(all.map(issue => issue.number));
 
+        // После перезапуска «последняя сессия» берётся из сохранённого состояния — кнопка «Смотреть» доступна сразу.
+        if (!this.status.lastSessionId) {
+            const latest = Object.entries(state.tasks).filter(([, task]) => task.sessionId).sort(([a], [b]) => Number(b) - Number(a))[0];
+            if (latest) this.status = { ...this.status, lastSessionId: latest[1].sessionId, lastIssue: Number(latest[0]) };
+        }
+
+        // «/justai status» (или ping) — живой ли мост и что в очереди: планировщик видит это, не дожидаясь задачи.
+        for (const issue of open) {
+            if (!isStatusCommand(issue, config.label) || state.followUps?.includes(issue.number)) continue;
+
+            state.followUps = [...state.followUps ?? [], issue.number];
+            await this.save(state);
+            await this.soft(client.comment(issue.number, statusReport(state, openNumbers, config.keepAwake ?? "task")), "comments");
+            await this.soft(client.closeIssue(issue.number), "closing issues");
+            return;
+        }
+
         // «В работе» в файле, но не в этом процессе: задачу оборвал перезапуск JustAI — продолжаем в той же сессии.
         for (const issue of open) {
             const task = state.tasks[issue.number];
@@ -325,7 +345,7 @@ export class GitHubTaskRunner {
         }
 
         const issues = open.filter(issue => followUpTarget(issue, config.label) === null && !runIssueCommand(issue, config.label)
-            && !closeCommand(issue, config.label) && (isTask(issue, config.label) || isTestTask(issue, config.label)));
+            && !closeCommand(issue, config.label) && !isStatusCommand(issue, config.label) && (isTask(issue, config.label) || isTestTask(issue, config.label)));
 
         for (const issue of issues) {
             const task = state.tasks[issue.number];
@@ -560,7 +580,8 @@ export class GitHubTaskRunner {
             await this.git(["checkout", base]).catch(() => undefined);
             await this.save(state);
             release();
-            this.status = { ...this.status, currentIssue: undefined, currentSessionId: undefined, ...(this.status.state === "working" ? { state: "idle" as const } : {}) };
+            this.status = { ...this.status, currentIssue: undefined, currentSessionId: undefined,
+                ...(task.sessionId ? { lastSessionId: task.sessionId, lastIssue: issue.number } : {}), ...(this.status.state === "working" ? { state: "idle" as const } : {}) };
         }
     }
 
@@ -1176,6 +1197,32 @@ export function followUpCommand(issue: GitHubIssue, label: string): { target: nu
 
     const action = match[1] === "stop" || match[1] === "pause" ? "stop" : match[1] === "merge" ? "merge" : "continue";
     return { target: Number(match[2]), action };
+}
+
+/** Issue-команда «/justai status» или «/justai ping» отдельной строкой. */
+export function isStatusCommand(issue: GitHubIssue, label: string): boolean {
+    return new RegExp(`^\\s*/${escapeRegExp(label)}\\s+(status|ping)\\s*$`, "im").test(issue.body);
+}
+
+/** Ответ на «/justai status»: мост жив, время ПК1, задачи по состояниям, режим сна. */
+export function statusReport(state: StoredState, openNumbers: Set<number>, keepAwake: string): string {
+    const open = Object.entries(state.tasks).filter(([issue]) => openNumbers.has(Number(issue)));
+    const by = (status: TaskState["status"]) => open.filter(([, task]) => task.status === status).map(([issue]) => `#${issue}`);
+    const line = (title: string, items: string[]) => items.length ? `- ${title}: ${items.join(", ")}` : "";
+    const waiting = Object.entries(state.waiting ?? {})
+        .filter(([issue]) => openNumbers.has(Number(issue)))
+        .map(([issue, deps]) => `#${issue} (ждёт ${deps.map(dep => `#${dep}`).join(", ")})`);
+
+    return [
+        `🟢 **JustAI** на связи: ${new Date().toISOString()}. Задачи берутся по одной, опрос GitHub раз в минуту.`,
+        `Сон ПК: ${keepAwake === "always" ? "запрещён всё время, пока включён мост" : keepAwake === "off" ? "не управляется JustAI" : "запрещён только во время задачи — между задачами ПК может уснуть, и мост замолчит до пробуждения"}.`,
+        "",
+        line("в работе", by("working")),
+        line("готов PR", by("review")),
+        line("не удалось", by("failed")),
+        line("на паузе", by("paused")),
+        line("ждут зависимостей", waiting),
+    ].filter((item, index) => index < 3 || item).join("\n");
 }
 
 /** Issue-команда «/justai close #2 #3, #4» (отдельной строкой): номера issues, которые надо закрыть. */
