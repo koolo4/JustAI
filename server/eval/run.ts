@@ -178,6 +178,8 @@ export function formatReport(results: EvalResult[], label: string): string {
 async function main(): Promise<void> {
     dotenv.config({ path: path.join(here, "..", ".env"), quiet: true });
     new SettingsStore(resolveInstallRoot()).apply();
+    // Замеры идут во временных папках: мост GitHub (настоящий токен, настоящие задачи) здесь не нужен.
+    process.env.JUSTAI_GITHUB_RUNNER = "off";
     configureProxy(process.env);
 
     const options = parseArgs(process.argv.slice(2), process.env);
