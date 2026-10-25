@@ -46,7 +46,8 @@ export const COMPATIBLE_PRESETS: CompatiblePreset[] = [
         prefix: "OLLAMA",
         baseURL: "http://127.0.0.1:11434/v1",
         keyEnv: [],
-        defaultModel: "qwen3:8b",
+        // qwen3.5:9b: 7 из 8 эталонных задач против 5 из 8 у qwen3:8b (25.10.2026).
+        defaultModel: "qwen3.5:9b",
         local: true,
         contextTokens: 32_768,
     },

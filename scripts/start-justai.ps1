@@ -45,10 +45,15 @@ elseif (Get-Command ollama -ErrorAction SilentlyContinue) {
     # Зависший llama-server от прошлого запуска держит видеопамять — завершаем.
     Get-Process llama-server -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
-    # Параметры для 8 ГБ видеопамяти и моделей ~8B (см. AGENTS.md). Прокси Ollama не нужен: он ломает загрузку моделей.
-    $env:OLLAMA_CONTEXT_LENGTH = "16384"
+    # Параметры для 8 ГБ видеопамяти (см. AGENTS.md). Окно 9216 — максимум, при котором qwen3.5:9b целиком
+    # на видеокарте (100% GPU: ~45 ток/с против ~33 при 16K с частью на процессоре). Модель держится в памяти 30 мин,
+    # одна модель и один запрос за раз — видеопамять не делится. Прокси Ollama не нужен: он ломает загрузку моделей.
+    $env:OLLAMA_CONTEXT_LENGTH = "9216"
     $env:OLLAMA_FLASH_ATTENTION = "1"
     $env:OLLAMA_KV_CACHE_TYPE = "q8_0"
+    $env:OLLAMA_KEEP_ALIVE = "30m"
+    $env:OLLAMA_MAX_LOADED_MODELS = "1"
+    $env:OLLAMA_NUM_PARALLEL = "1"
     Remove-Item Env:HTTPS_PROXY, Env:HTTP_PROXY, Env:ALL_PROXY -ErrorAction SilentlyContinue
 
     Start-Process ollama -ArgumentList "serve" -WindowStyle Minimized

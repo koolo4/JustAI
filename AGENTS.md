@@ -26,10 +26,11 @@ npm run dev:server                   # сервер на http://127.0.0.1:4302
 npm run dev:web                      # фронт на http://localhost:3000
 ```
 Без API-ключа работает провайдер `mock`. Ключи и модели — в `server/.env` (образец `server/.env.example`).
-Локальные модели: Ollama запускать с большим контекстом, иначе промпт обрезается молча. Модель должна целиком помещаться в видеопамять (`ollama ps` → `100% GPU`), иначе она в разы медленнее. Для 8 ГБ VRAM и моделей ~8B:
+Локальные модели: Ollama запускать с заданным контекстом, иначе промпт обрезается молча. Модель должна целиком помещаться в видеопамять (`ollama ps` → `100% GPU`), иначе она в разы медленнее. Модель по умолчанию — `qwen3.5:9b`; для 8 ГБ VRAM окно 9216 — максимум, при котором она целиком на GPU:
 ```powershell
-$env:OLLAMA_CONTEXT_LENGTH=16384; $env:OLLAMA_FLASH_ATTENTION=1; $env:OLLAMA_KV_CACHE_TYPE="q8_0"; ollama serve
+$env:OLLAMA_CONTEXT_LENGTH=9216; $env:OLLAMA_FLASH_ATTENTION=1; $env:OLLAMA_KV_CACHE_TYPE="q8_0"; $env:OLLAMA_KEEP_ALIVE="30m"; $env:OLLAMA_MAX_LOADED_MODELS=1; $env:OLLAMA_NUM_PARALLEL=1; ollama serve
 ```
+Эти переменные заданы и в переменных среды пользователя Windows — их видит и Ollama, запущенная из трея.
 `OLLAMA_CONTEXT` в `server/.env` должен совпадать с `OLLAMA_CONTEXT_LENGTH`. Для qwen3 без «размышлений» (в разы быстрее): `OLLAMA_REASONING_EFFORT=none`.
 При перезапуске Ollama завершать и `llama-server.exe`: он может остаться сиротой и держать память и CPU.
 Папку проекта для агента выбирают в интерфейсе (кнопка 📁 в верхней панели; по умолчанию — корень этого репозитория). `JUSTAI_WORKSPACE` фиксирует папку и выключает переключение.

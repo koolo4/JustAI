@@ -73,7 +73,9 @@ export class BridgeLog {
     }
 
     private load(): Promise<void> {
-        this.loaded ??= readFile(this.file, "utf8")
+        // Сначала дождаться своих записей: иначе можно прочитать строку, которую в этот момент дописывают.
+        this.loaded ??= this.writes
+            .then(() => readFile(this.file, "utf8"))
             .then(text => {
                 const fromDisk = text.split("\n").filter(Boolean).flatMap(line => {
                     try {
