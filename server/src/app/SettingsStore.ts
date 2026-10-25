@@ -54,6 +54,7 @@ export function settingFields(): FieldSpec[] {
         { key: "JUSTAI_GITHUB_MERGE", label: "Сливать PR по команде «/justai merge», если проверки зелёные (on/off)", group: "GitHub", kind: "text", placeholder: "on" },
         { key: "JUSTAI_GITHUB_MERGE_METHOD", label: "Способ слияния (squash, merge или rebase)", group: "GitHub", kind: "text", placeholder: "squash" },
         { key: "JUSTAI_KEEP_AWAKE", label: "Не давать ПК уснуть (task — пока идёт задача, always — пока включён мост, off)", group: "GitHub", kind: "text", placeholder: "task" },
+        { key: "JUSTAI_GITHUB_AUTO_STASH", label: "Незакоммиченные файлы перед задачей убирать в git stash (on) или ждать (off)", group: "GitHub", kind: "text", placeholder: "on" },
         { key: "JUSTAI_APP_IDLE_MIN", label: "Остановить приложение («/justai app start») после минут без обращений", group: "GitHub", kind: "number", placeholder: "30" },
         { key: "JUSTAI_GITHUB_POLL_SEC", label: "Проверять новые задачи каждые (секунд)", group: "GitHub", kind: "number", placeholder: "60" },
         { key: "JUSTAI_COMPLETION_MODEL", label: "Модель подсказок по Tab в Ollama (off — выключить)", group: "Редактор", kind: "text", placeholder: "qwen2.5-coder:7b" },

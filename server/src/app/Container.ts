@@ -464,6 +464,7 @@ export class Container {
                     pollMs: (Number(process.env.JUSTAI_GITHUB_POLL_SEC) || 60) * 1000,
                     allowPublic: process.env.JUSTAI_GITHUB_ALLOW_PUBLIC === "on",
                     merge: process.env.JUSTAI_GITHUB_MERGE !== "off",
+                    autoStash: process.env.JUSTAI_GITHUB_AUTO_STASH !== "off",
                     ...(["merge", "rebase"].includes(process.env.JUSTAI_GITHUB_MERGE_METHOD ?? "")
                         ? { mergeMethod: process.env.JUSTAI_GITHUB_MERGE_METHOD as "merge" | "rebase" }
                         : {}),

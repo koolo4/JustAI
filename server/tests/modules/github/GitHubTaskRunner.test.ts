@@ -26,7 +26,7 @@ import { BrowserService } from "../../../src/infrastructure/browser/BrowserServi
 import { Verifier } from "../../../src/modules/agent/runtime/Verifier.js";
 import {
     appCommand, ARTIFACTS_BRANCH, checksReport, closeCommand, dependsOn, e2eCommand, testEvidence, followUpCommand, followUpTarget, GitHubTaskRunner, isMergeCommand, isStopCommand, isTask, isTestTask, LABELS, originMatches,
-    progressReport, runCommentCommand, runIssueCommand, stripCommands, taskPrompt, testTarget, testVerdict,
+    progressReport, runCommentCommand, runIssueCommand, statusReport, stripCommands, taskPrompt, testTarget, testVerdict,
 } from "../../../src/modules/github/GitHubTaskRunner.js";
 
 const git = new GitService();
@@ -709,6 +709,15 @@ describe.skipIf(!git.available)("GitHubTaskRunner", () => {
         }
     }, 180_000);
 
+    it("drops dependencies that are already closed from the status", () => {
+        const state = { tasks: {}, waiting: { "6": [5], "7": [6], "8": [5, 7] } };
+        const report = statusReport(state, new Set([6, 7, 8]), "task");
+
+        expect(report).toContain("#7 (ждёт #6)");
+        expect(report).toContain("#8 (ждёт #7)");
+        expect(report).not.toContain("#6 (ждёт");
+    });
+
     it("recognises app and e2e commands", () => {
         expect(appCommand("/justai app start #5", "justai")).toEqual({ action: "start", target: 5 });
         expect(appCommand("text\n/justai app logs\n", "justai")).toEqual({ action: "logs" });
@@ -818,9 +827,41 @@ describe.skipIf(!git.available)("GitHubTaskRunner", () => {
 
         github.isPrivateRepo = true;
         await import("node:fs/promises").then(fs => fs.writeFile(path.join(root, "user-work.txt"), "unsaved"));
+        const waiting = new GitHubTaskRunner({
+            client: github as unknown as GitHubClient,
+            git,
+            sessions,
+            permissions: new PermissionService({ rulesFile: path.join(root, ".justai", "pw.json"), emit: () => undefined }),
+            workspaceRoot: root,
+            config: { label: "justai", allowedUsers: [], profile: "coder", provider: "mock", pollMs: 60_000, allowPublic: false, token: "", autoStash: false },
+        });
+        await waiting.check();
+        await waiting.check();
+        expect(waiting.getStatus().lastError).toContain("uncommitted changes");
+        // Не молчит: один раз пишет в задачу, что ждёт чистую папку, и какие файлы мешают.
+        expect(github.comments.get(4)).toHaveLength(1);
+        expect(github.comments.get(4)![0]!.body).toContain("user-work.txt");
+        expect(existsSync(path.join(root, "user-work.txt"))).toBe(true);
+    }, 60_000);
+
+    it("commits even when the project's .gitignore lists .justai, and tidies leftovers into git stash", async () => {
+        // Так упала задача #5 в kaitos: «The following paths are ignored by one of your .gitignore files: .justai».
+        await writeFile(path.join(root, ".gitignore"), ".justai/\nnode_modules/\n");
+        run(root, "add", ".gitignore");
+        run(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "gitignore");
+        run(root, "push", "origin", "HEAD:main");
+
+        // Следы прерванной задачи в папке: раньше мост из-за них молча переставал брать задачи.
+        await writeFile(path.join(root, "leftover.json"), "{}");
+
+        github.issue(95, "создай файл ok.txt");
         await runner.check();
-        expect(runner.getStatus().lastError).toContain("uncommitted changes");
-        expect(github.comments.get(4)).toBeUndefined();
+
+        expect(run(remote, "ls-tree", "--name-only", "justai/issue-95")).toContain("ok.txt");
+        expect(run(remote, "ls-tree", "--name-only", "justai/issue-95")).not.toContain("leftover.json");
+        expect(github.comments.get(95)!.some(comment => comment.body.includes("git stash") && comment.body.includes("leftover.json"))).toBe(true);
+        expect(run(root, "stash", "list")).toContain("JustAI");
+        expect(runner.getStatus().tasks[0]).toMatchObject({ issue: 95, status: "review" });
     }, 60_000);
 
     it("works only in a clone of the configured repository", () => {

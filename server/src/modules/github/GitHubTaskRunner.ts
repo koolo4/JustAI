@@ -49,6 +49,8 @@ export interface GitHubRunnerConfig {
     mergeMethod?: "squash" | "merge" | "rebase";
     /** task — не спать, пока идёт задача (по умолчанию); always — пока включён мост; off. */
     keepAwake?: "task" | "always" | "off";
+    /** Незакоммиченное в папке перед задачей — убрать в git stash (по умолчанию да) или ждать. */
+    autoStash?: boolean;
     /** Через сколько минут без обращений остановить приложение, запущенное «/justai app start» (по умолчанию 30). */
     appIdleMinutes?: number;
 }
@@ -270,6 +272,14 @@ export class GitHubTaskRunner {
         // Зависимость выполнена, когда её issue закрыт (слияние PR «Closes #N» закрывает его само).
         const openNumbers = new Set(all.map(issue => issue.number));
 
+        // Ожидания зависимостей пересчитываются: закрытый issue (слит или закрыт командой) больше не держит задачу.
+        for (const [issue, deps] of Object.entries(state.waiting ?? {})) {
+            const still = deps.filter(dep => openNumbers.has(dep));
+
+            if (!openNumbers.has(Number(issue)) || still.length === 0) delete state.waiting![issue];
+            else if (still.length !== deps.length) state.waiting![issue] = still;
+        }
+
         // После перезапуска «последняя сессия» берётся из сохранённого состояния — кнопка «Смотреть» доступна сразу.
         if (!this.status.lastSessionId) {
             const latest = Object.entries(state.tasks).filter(([, task]) => task.sessionId).sort(([a], [b]) => Number(b) - Number(a))[0];
@@ -316,9 +326,13 @@ export class GitHubTaskRunner {
 
             state.followUps = [...state.followUps ?? [], issue.number];
             await this.save(state);
+            const dirty = await this.dirtyFiles().catch(() => [] as string[]);
             await this.soft(client.comment(issue.number, [
                 statusReport(state, openNumbers, config.keepAwake ?? "task"),
                 "",
+                dirty.length
+                    ? `⚠ В папке проекта ${dirty.length} незакоммиченных файл(ов): ${dirty.slice(0, 5).map(line => `\`${line.slice(3)}\``).join(", ")}${dirty.length > 5 ? " …" : ""} — ${config.autoStash === false ? "задачи ждут, пока папка не станет чистой" : "перед следующей задачей они уйдут в git stash"}.`
+                    : "Папка проекта чистая.",
                 appStatusText(this.apps?.status() ?? null, config.appIdleMinutes ?? 30),
             ].join("\n")), "comments");
             await this.soft(client.closeIssue(issue.number), "closing issues");
@@ -518,16 +532,15 @@ export class GitHubTaskRunner {
         const branch = previous?.branch
             ?? (kind === "test" ? (testOf !== null ? state.tasks[testOf]?.branch : undefined) ?? base : `justai/issue-${issue.number}`);
 
-        // Чужие незакоммиченные изменения не трогаем: задача подождёт.
-        // Исключение — работу оборвал перезапуск: папка на ветке этой задачи (изменения агента продолжаются)
-        // или прерванная проверка (её следы в папке оставила она сама — убираются).
-        const dirty = await this.isDirty();
+        // Незакоммиченное в папке: если работу оборвал перезапуск (папка на ветке этой задачи) — изменения агента
+        // продолжаются; прерванная проверка — её следы убираются; иначе — в git stash (или ждать, если автоуборка выключена).
+        let dirty = await this.isDirty();
         const onTaskBranch = (await this.git(["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => "")).trim() === branch;
         const interruptedTest = kind === "test" && previous?.status === "working";
 
         if (dirty && !onTaskBranch && !interruptedTest) {
-            this.status = { ...this.status, state: "error", lastError: "The workspace has uncommitted changes; GitHub tasks wait until it is clean." };
-            return;
+            if (!(await this.makeClean(issue.number, feedback.length ? "доработкой задачи" : "задачей"))) return;
+            dirty = false;
         }
 
         const comments = knownComments ?? await client.listComments(issue.number);
@@ -692,6 +705,8 @@ export class GitHubTaskRunner {
             await this.cleanupSession(task.sessionId);
             // Проверка ничего не меняет: всё, что после неё осталось в папке, — её следы.
             if (kind === "test") await this.discardChanges().catch(() => undefined);
+            // Упавшая задача не должна оставлять файлы в папке: иначе следующие задачи упираются в «грязную» папку.
+            if (kind === "code" && task.status === "failed") await this.saveFailedWork(issue, branch);
             await this.git(["checkout", base]).catch(() => undefined);
             await this.save(state);
             release();
@@ -781,8 +796,7 @@ export class GitHubTaskRunner {
             return true;
         }
 
-        if (await this.isDirty()) {
-            this.status = { ...this.status, state: "error", lastError: "The workspace has uncommitted changes; GitHub tasks wait until it is clean." };
+        if (!(await this.makeClean(postTo, "командой"))) {
             return false;
         }
 
@@ -849,8 +863,7 @@ export class GitHubTaskRunner {
             return true;
         }
 
-        if (await this.isDirty()) {
-            this.status = { ...this.status, state: "error", lastError: "The workspace has uncommitted changes; GitHub tasks wait until it is clean." };
+        if (!(await this.makeClean(replyTo, "слиянием"))) {
             return false;
         }
 
@@ -1191,7 +1204,88 @@ export class GitHubTaskRunner {
     }
 
     private async isDirty(): Promise<boolean> {
-        return (await this.git(["status", "--porcelain", "--", ".", ":(exclude).justai"])).trim() !== "";
+        return (await this.dirtyFiles()).length > 0;
+    }
+
+    /** Незакоммиченные файлы рабочей папки (.justai исключена через .git/info/exclude). */
+    private async dirtyFiles(): Promise<string[]> {
+        await this.ensureLocalExclude();
+        return (await this.git(["status", "--porcelain"])).split("\n").map(line => line.trimEnd()).filter(Boolean);
+    }
+
+    private excluded = false;
+
+    /**
+     * .justai — только в .git/info/exclude (локально, не коммитится), без pathspec «:(exclude).justai»:
+     * git отвергает такой pathspec, если папка уже есть в .gitignore проекта («paths are ignored»), — коммит падал.
+     */
+    private async ensureLocalExclude(): Promise<void> {
+        if (this.excluded) return;
+
+        const relative = (await this.git(["rev-parse", "--git-path", "info/exclude"]).catch(() => "")).trim();
+        if (!relative) return;
+
+        const file = path.resolve(this.deps.workspaceRoot, relative);
+        const current = await readFile(file, "utf8").catch(() => "");
+
+        if (!/^\/?\.justai\/?\s*$/m.test(current)) {
+            await mkdir(path.dirname(file), { recursive: true });
+            await writeFile(file, `${current}${current && !current.endsWith("\n") ? "\n" : ""}.justai/\n`, "utf8");
+        }
+
+        this.excluded = true;
+    }
+
+    /**
+     * Папка не чистая, а задача должна начаться: незакоммиченное убирается в git stash (не удаляется — вернуть:
+     * git stash pop). Обычно это следы прерванной задачи. С JUSTAI_GITHUB_AUTO_STASH=off — сообщить и ждать.
+     * true — можно работать.
+     */
+    private async makeClean(issue: number, why: string): Promise<boolean> {
+        const files = await this.dirtyFiles();
+
+        if (!files.length) return true;
+
+        const list = files.slice(0, 15).map(line => `- \`${line.slice(3)}\``).join("\n") + (files.length > 15 ? `\n- … ещё ${files.length - 15}` : "");
+
+        if (this.deps.config.autoStash === false) {
+            if (!this.dirtyNotified.has(issue)) {
+                this.dirtyNotified.add(issue);
+                this.note({ kind: "error", issue, text: `Рабочая папка не чистая (${files.length} файл.) — ${why} ждёт.` });
+                await this.soft(this.deps.client.comment(issue, `⏳ **JustAI**: в папке проекта на ПК1 есть незакоммиченные изменения — ${why} ждёт, пока она не станет чистой:\n${list}\n\n_На ПК1: закоммитьте или уберите их (или включите автоуборку: JUSTAI_GITHUB_AUTO_STASH=on)._`), "comments");
+            }
+
+            this.status = { ...this.status, state: "error", lastError: "The workspace has uncommitted changes; GitHub tasks wait until it is clean." };
+            return false;
+        }
+
+        const message = `JustAI: убрано перед ${why} (#${issue}) ${new Date().toISOString()}`;
+        await this.git(["stash", "push", "--include-untracked", "-m", message]);
+        this.dirtyNotified.delete(issue);
+        this.note({ kind: "note", issue, text: `Незакоммиченные файлы (${files.length}) убраны в git stash перед ${why}. Вернуть: git stash pop.` });
+        await this.soft(this.deps.client.comment(issue, `🧹 **JustAI**: в папке проекта на ПК1 оставались незакоммиченные файлы (обычно — следы прерванной задачи). Они не удалены, а убраны в \`git stash\` («${message}»), чтобы начать ${why}:\n${list}`), "comments");
+        return true;
+    }
+
+    private readonly dirtyNotified = new Set<number>();
+
+    /** Сделанное упавшей задачей — WIP-коммит в её ветку (и на GitHub, если получится), иначе — в git stash. */
+    private async saveFailedWork(issue: GitHubIssue, branch: string): Promise<void> {
+        if (!(await this.isDirty().catch(() => false))) return;
+
+        try {
+            if (await this.commit(issue, "WIP (не закончено): ")) {
+                await this.push(branch).catch(() => undefined);
+                this.note({ kind: "note", issue: issue.number, text: `Незаконченная работа сохранена коммитом в ветке ${branch}.` });
+            }
+        }
+        catch (error) {
+            this.deps.log?.(`[github] issue #${issue.number}: could not commit failed work: ${message(error)}`);
+        }
+
+        if (await this.isDirty().catch(() => false)) {
+            await this.git(["stash", "push", "--include-untracked", "-m", `JustAI: незаконченная задача #${issue.number}`]).catch(() => undefined);
+        }
     }
 
     /**
@@ -1329,8 +1423,11 @@ export class GitHubTaskRunner {
 
     /** Закоммитить всё, что сделал агент. false — изменений нет. */
     private async commit(issue: GitHubIssue, prefix = ""): Promise<boolean> {
-        // .justai (сессии, токен, состояние моста) не коммитится никогда, даже если у проекта нет своего .gitignore.
-        await this.git(["add", "-A", "--", ".", ":(exclude).justai"]);
+        // .justai (сессии, токен, состояние моста) не коммитится никогда: она в .git/info/exclude,
+        // а если её когда-то добавили в индекс — убираем оттуда.
+        await this.ensureLocalExclude();
+        await this.git(["add", "-A"]);
+        await this.git(["reset", "-q", "--", ".justai"]).catch(() => undefined);
 
         if (!(await this.git(["diff", "--cached", "--name-only"])).trim()) {
             return false;
@@ -1630,7 +1727,8 @@ export function statusReport(state: StoredState, openNumbers: Set<number>, keepA
     const by = (status: TaskState["status"]) => open.filter(([, task]) => task.status === status).map(([issue]) => `#${issue}`);
     const line = (title: string, items: string[]) => items.length ? `- ${title}: ${items.join(", ")}` : "";
     const waiting = Object.entries(state.waiting ?? {})
-        .filter(([issue]) => openNumbers.has(Number(issue)))
+        .map(([issue, deps]) => [issue, deps.filter(dep => openNumbers.has(dep))] as const)
+        .filter(([issue, deps]) => openNumbers.has(Number(issue)) && deps.length > 0)
         .map(([issue, deps]) => `#${issue} (ждёт ${deps.map(dep => `#${dep}`).join(", ")})`);
 
     return [
