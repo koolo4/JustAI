@@ -358,14 +358,38 @@ export class GitHubTaskRunner {
             return;
         }
 
-        // «В работе» в файле, но не в этом процессе: задачу оборвал перезапуск JustAI — продолжаем в той же сессии.
+        // «В работе» в файле, но не в этом процессе: задачу оборвал перезапуск JustAI. Если её уже просили остановить —
+        // ставим на паузу и отвечаем; иначе продолжаем (в той же сессии, а если сессию не успели записать — в новой).
         for (const issue of open) {
             const task = state.tasks[issue.number];
 
-            if (task?.status === "working" && task.sessionId) {
-                await this.run(issue, state, [{ id: 0, author: "JustAI", body: RESUME_NOTE, createdAt: "" }]);
+            if (task?.status !== "working") continue;
+
+            const stopIssue = open.find(item => !state.followUps?.includes(item.number)
+                && followUpCommand(item, config.label)?.action === "stop" && followUpTarget(item, config.label) === issue.number);
+            const comments = await client.listComments(issue.number).catch(() => [] as GitHubComment[]);
+            const stopComment = comments.find(item => item.id > task.lastCommentId && allowed.has(item.author.toLowerCase()) && isStopCommand(item.body, config.label));
+
+            if (stopIssue || stopComment) {
+                task.status = "paused";
+                task.lastCommentId = Math.max(task.lastCommentId, stopComment?.id ?? 0);
+                if (stopIssue) state.followUps = [...state.followUps ?? [], stopIssue.number];
+                await this.save(state);
+                this.note({ kind: "paused", issue: issue.number, text: "Задачу оборвал перезапуск JustAI; по команде остановки она поставлена на паузу." });
+                await this.soft(client.comment(issue.number, "⏸ **JustAI**: задача была прервана перезапуском JustAI и по команде остановки поставлена на паузу. Продолжить — комментарий с указаниями или issue «/justai continue #" + issue.number + "»."), "comments");
+                await this.soft(client.addLabels(issue.number, [LABELS.paused]), "labels");
+                await this.soft(client.removeLabel(issue.number, LABELS.working), "labels");
+
+                if (stopIssue) {
+                    await this.soft(client.comment(stopIssue.number, `Задача #${issue.number} остановлена.`), "comments");
+                    await this.soft(client.closeIssue(stopIssue.number), "closing issues");
+                }
+
                 return;
             }
+
+            await this.run(issue, state, [{ id: 0, author: "JustAI", body: RESUME_NOTE, createdAt: "" }]);
+            return;
         }
 
         // Правки отдельным issue («/justai #3»): для планировщиков, которым GitHub не даёт комментировать.
@@ -602,7 +626,9 @@ export class GitHubTaskRunner {
                 await this.checkoutBranch(branch, base, Boolean(previous));
             }
 
-            if (!task.sessionId || !(await sessions.get(task.sessionId).then(() => true, () => false))) {
+            const freshSession = !task.sessionId || !(await sessions.get(task.sessionId).then(() => true, () => false));
+
+            if (freshSession) {
                 const created = await sessions.create({
                     profile: kind === "test" ? config.testProfile ?? "tester" : config.profile,
                     provider: config.provider,
@@ -611,6 +637,8 @@ export class GitHubTaskRunner {
                     mode: "full-auto",
                 });
                 task.sessionId = created.id;
+                // Записать сразу: если JustAI перезапустят посреди задачи, продолжение найдёт эту сессию.
+                await this.save(state);
                 await sessions.setTitle(created.id, `GitHub #${issue.number}: ${cleanTitle(issue.title, config.label)}`);
             }
 
@@ -618,8 +646,11 @@ export class GitHubTaskRunner {
 
             permissions.setUnattended(task.sessionId, true);
             const startIndex = (await sessions.get(task.sessionId)).messages.length;
-            const prompt = feedback.length ? feedbackPrompt(issue, feedback, branch)
-                : kind === "test" ? testPrompt(issue, branch, config.label) : taskPrompt(issue, branch, config.label);
+            const original = kind === "test" ? testPrompt(issue, branch, config.label) : taskPrompt(issue, branch, config.label);
+            // Новая сессия (прежнюю не успели записать или она потеряна) не знает задачи: сначала её текст, потом указания.
+            const prompt = !feedback.length ? original
+                : freshSession ? `${original}\n\n${feedbackPrompt(issue, feedback, branch)}`
+                    : feedbackPrompt(issue, feedback, branch);
             await sessions.send(task.sessionId, { text: prompt });
             this.note({ kind: "start", issue: issue.number, title, sessionId: task.sessionId, text: `Выполняю в ветке ${branch}${kind === "test" ? " (проверка, файлы не меняются)" : ""}` });
 

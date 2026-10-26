@@ -636,6 +636,30 @@ describe.skipIf(!git.available)("GitHubTaskRunner", () => {
         expect(awake.held).toBe(0);
     }, 90_000);
 
+    it("handles a task cut off by a restart before its session was saved: stop pauses it, otherwise it resumes", async () => {
+        // Так застряла #115 в kaitos: «в работе» без сессии — ни продолжения, ни ответа на /justai stop.
+        const fs = await import("node:fs/promises");
+        const stateFile = path.join(root, ".justai", "github-state.json");
+        await fs.mkdir(path.dirname(stateFile), { recursive: true });
+        const orphan = (branch: string) => ({ sessionId: "", branch, status: "working", lastCommentId: 0, kind: "code" });
+        await fs.writeFile(stateFile, JSON.stringify({ tasks: { "130": orphan("justai/issue-130"), "140": orphan("justai/issue-140") } }));
+
+        github.issue(130, "создай файл p.txt");
+        github.issue(131, "Stop", "me", { labels: [], body: "/justai stop #130" });
+        await runner.check();
+
+        expect(runner.getStatus().tasks.find(task => task.issue === 130)).toMatchObject({ status: "paused" });
+        expect(github.comments.get(131)![0]!.body).toContain("остановлена");
+        expect(github.closed).toContain(131);
+        expect(github.issues.find(item => item.number === 130)!.labels).toContain(LABELS.paused);
+
+        // Без команды остановки — продолжение в новой сессии.
+        github.issue(140, "создай файл r.txt");
+        await runner.check();
+        expect(runner.getStatus().tasks.find(task => task.issue === 140)).toMatchObject({ status: "review" });
+        expect(run(remote, "ls-tree", "--name-only", "justai/issue-140")).toContain("r.txt");
+    }, 90_000);
+
     it("runs commands on the branch of any pull request of the repository, not only bridge tasks", async () => {
         // PR #113 сделал сам планировщик в ветке arena/feature — проверить его через ПК1.
         run(root, "checkout", "-b", "arena/feature");
