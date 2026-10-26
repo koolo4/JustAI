@@ -6,7 +6,8 @@ import { z } from "zod";
 import { PermissionService } from "../../../src/modules/agent/permissions/PermissionService.js";
 import { createGitHubTools } from "../../../src/modules/agent/tools/githubTools.js";
 import { defineTool } from "../../../src/modules/agent/tools/Tool.js";
-import { BOT_MARKER, GitHubClient, GitHubError } from "../../../src/modules/github/GitHubClient.js";
+import { BOT_MARKER, GitHubClient, GitHubError, unescapeBody } from "../../../src/modules/github/GitHubClient.js";
+import { e2eCommand } from "../../../src/modules/github/GitHubTaskRunner.js";
 
 interface Call { url: string; method: string; body?: unknown; headers: Record<string, string> }
 
@@ -48,6 +49,28 @@ describe("GitHubClient", () => {
         await expect(client.defaultBranch()).rejects.toThrow(GitHubError);
         await expect(client.defaultBranch()).rejects.toThrow(/401: Bad credentials/);
         expect(() => new GitHubClient("t", "not a repo")).toThrow(/owner\/name/);
+    });
+});
+
+describe("unescapeBody", () => {
+    it("turns literal \\n from web-chat integrations into real line breaks", () => {
+        // Так пришёл issue #115 в kaitos: всё описание — одна строка с «\n» из двух символов.
+        const body = "Проверка PR\\n/justai e2e #113\\n```yaml\\nsteps:\\n  - click: \\\"#run\\\"\\n```";
+        const fixed = unescapeBody(body);
+
+        expect(fixed.split("\n")).toEqual(["Проверка PR", "/justai e2e #113", "```yaml", "steps:", "  - click: \"#run\"", "```"]);
+        expect(e2eCommand(fixed, "justai")).toEqual({ target: 113 });
+    });
+
+    it("normalises Windows line breaks so commands at line end are still recognised", () => {
+        expect(unescapeBody("Готово\r\n/justai merge\r\n")).toBe("Готово\n/justai merge\n");
+        expect(e2eCommand(unescapeBody("/justai e2e #7\r\n```yaml\r\nsteps: []\r\n```"), "justai")).toEqual({ target: 7 });
+    });
+
+    it("leaves normal text alone, even when it mentions \\n in code", () => {
+        const body = "Замени разделитель:\n```js\nlines.join('\\n')\n```";
+        expect(unescapeBody(body)).toBe(body);
+        expect(unescapeBody("коротко без переносов")).toBe("коротко без переносов");
     });
 });
 

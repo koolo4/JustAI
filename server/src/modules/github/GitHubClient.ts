@@ -94,7 +94,7 @@ export class GitHubClient {
             `${this.base}/issues/${number}/comments?per_page=100`,
         );
 
-        return items.map(item => ({ id: item.id, author: item.user?.login ?? "", body: item.body ?? "", createdAt: item.created_at }));
+        return items.map(item => ({ id: item.id, author: item.user?.login ?? "", body: unescapeBody(item.body ?? ""), createdAt: item.created_at }));
     }
 
     /** Комментарий к issue; возвращает его id (чтобы потом обновлять, например отчёт о ходе работы). */
@@ -223,11 +223,29 @@ interface RawPull {
     state: string;
 }
 
+/**
+ * Некоторые интеграции (GitHub в веб-чатах) присылают текст с переносами строк в виде двух символов «\n».
+ * Тогда всё описание — одна строка, и команды «/justai …», «Depends on», блоки ```yaml не распознаются.
+ * Если настоящих переносов нет, а «\n» есть — раскрываем \r\n, \n, \t и \".
+ * Переносы Windows (\r\n) приводятся к \n: команды разбираются построчно и \r в конце строки им мешает.
+ */
+export function unescapeBody(raw: string): string {
+    const body = raw.replace(/\r\n?/g, "\n");
+
+    if (body.includes("\n") || !body.includes("\\n")) return body;
+
+    return body
+        .replace(/\\r\\n/g, "\n")
+        .replace(/\\n/g, "\n")
+        .replace(/\\t/g, "\t")
+        .replace(/\\"/g, "\"");
+}
+
 function toIssue(raw: RawIssue): GitHubIssue {
     return {
         number: raw.number,
         title: raw.title,
-        body: raw.body ?? "",
+        body: unescapeBody(raw.body ?? ""),
         author: raw.user?.login ?? "",
         labels: raw.labels.map(label => typeof label === "string" ? label : label.name),
         url: raw.html_url,

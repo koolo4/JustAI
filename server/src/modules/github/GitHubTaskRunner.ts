@@ -1504,14 +1504,14 @@ export function isTestTask(issue: GitHubIssue, label: string): boolean {
 
 /** Номер задачи, ветку которой надо проверить («/justai test #N»), иначе null — основная ветка. */
 export function testTarget(issue: GitHubIssue, label: string): number | null {
-    const match = new RegExp(`^\\s*/${escapeRegExp(label)}\\s+test\\s+#(\\d+)\\s*$`, "im").exec(issue.body);
+    const match = new RegExp(`^[ \\t]*/${escapeRegExp(label)}[ \\t]+test[ \\t]+#(\\d+)[ \\t]*$`, "im").exec(issue.body);
     return match ? Number(match[1]) : null;
 }
 
 /** Issue-команда: первая строка описания «/justai run [#N] команда». */
 export function runIssueCommand(issue: GitHubIssue, label: string): { target?: number; command: string } | null {
     const first = issue.body.split("\n").find(line => line.trim()) ?? "";
-    const match = new RegExp(`^\\s*/${escapeRegExp(label)}\\s+run\\s+(?:#(\\d+)\\s+)?(.+?)\\s*$`, "i").exec(first);
+    const match = new RegExp(`^[ \\t]*/${escapeRegExp(label)}[ \\t]+run[ \\t]+(?:#(\\d+)[ \\t]+)?(.+?)[ \\t]*$`, "i").exec(first);
 
     if (!match) return null;
 
@@ -1520,7 +1520,7 @@ export function runIssueCommand(issue: GitHubIssue, label: string): { target?: n
 
 /** Комментарий-команда «/justai run команда» отдельной строкой; номер задачи в комментарии не нужен. */
 export function runCommentCommand(body: string, label: string): string | null {
-    const match = new RegExp(`^\\s*/${escapeRegExp(label)}\\s+run\\s+(?:#\\d+\\s+)?(.+?)\\s*$`, "im").exec(body);
+    const match = new RegExp(`^[ \\t]*/${escapeRegExp(label)}[ \\t]+run[ \\t]+(?:#\\d+[ \\t]+)?(.+?)[ \\t]*$`, "im").exec(body);
     return match ? match[1]! : null;
 }
 
@@ -1626,7 +1626,7 @@ export function isTask(issue: GitHubIssue, label: string): boolean {
  * Служебный issue для задачи N: «/justai #3», «/justai continue #3» (правка или продолжение), «/justai stop #3» (остановить).
  */
 export function followUpCommand(issue: GitHubIssue, label: string): { target: number; action: "stop" | "continue" | "merge" } | null {
-    const match = new RegExp(`^\\s*/${escapeRegExp(label)}\\s+(?:(stop|pause|continue|merge)\\s+)?#(\\d+)\\s*$`, "im").exec(issue.body);
+    const match = new RegExp(`^[ \\t]*/${escapeRegExp(label)}[ \\t]+(?:(stop|pause|continue|merge)[ \\t]+)?#(\\d+)[ \\t]*$`, "im").exec(issue.body);
 
     if (!match) {
         return null;
@@ -1638,7 +1638,7 @@ export function followUpCommand(issue: GitHubIssue, label: string): { target: nu
 
 /** «/justai app start|stop|status|logs [#N]» отдельной строкой (в issue или комментарии). */
 export function appCommand(body: string, label: string): { action: "start" | "stop" | "status" | "logs"; target?: number } | null {
-    const match = new RegExp(`^\\s*/${escapeRegExp(label)}\\s+app\\s+(start|stop|status|logs)(?:\\s+#(\\d+))?\\s*$`, "im").exec(body);
+    const match = new RegExp(`^[ \\t]*/${escapeRegExp(label)}[ \\t]+app[ \\t]+(start|stop|status|logs)(?:[ \\t]+#(\\d+))?[ \\t]*$`, "im").exec(body);
 
     if (!match) return null;
 
@@ -1647,7 +1647,7 @@ export function appCommand(body: string, label: string): { action: "start" | "st
 
 /** «/justai e2e [#N] [all | путь]» отдельной строкой; сценарий — блоком ```yaml рядом. */
 export function e2eCommand(body: string, label: string): { target?: number; files?: string } | null {
-    const match = new RegExp(`^\\s*/${escapeRegExp(label)}\\s+e2e(?:\\s+#(\\d+))?(?:\\s+(\\S+))?\\s*$`, "im").exec(body);
+    const match = new RegExp(`^[ \\t]*/${escapeRegExp(label)}[ \\t]+e2e(?:[ \\t]+#(\\d+))?(?:[ \\t]+(\\S+))?[ \\t]*$`, "im").exec(body);
 
     if (!match) return null;
 
@@ -1718,7 +1718,7 @@ export function appStatusText(app: RunningApp | null, idleMinutes: number): stri
 
 /** Issue-команда «/justai status» или «/justai ping» отдельной строкой. */
 export function isStatusCommand(issue: GitHubIssue, label: string): boolean {
-    return new RegExp(`^\\s*/${escapeRegExp(label)}\\s+(status|ping)\\s*$`, "im").test(issue.body);
+    return new RegExp(`^[ \\t]*/${escapeRegExp(label)}[ \\t]+(status|ping)[ \\t]*$`, "im").test(issue.body);
 }
 
 /** Ответ на «/justai status»: мост жив, время ПК1, задачи по состояниям, режим сна. */
@@ -1745,7 +1745,7 @@ export function statusReport(state: StoredState, openNumbers: Set<number>, keepA
 
 /** Issue-команда «/justai close #2 #3, #4» (отдельной строкой): номера issues, которые надо закрыть. */
 export function closeCommand(issue: GitHubIssue, label: string): number[] | null {
-    const match = new RegExp(`^\\s*/${escapeRegExp(label)}\\s+close\\s+((?:#\\d+[\\s,]*)+)$`, "im").exec(issue.body);
+    const match = new RegExp(`^[ \\t]*/${escapeRegExp(label)}[ \\t]+close[ \\t]+((?:#\\d+[ \\t,]*)+)$`, "im").exec(issue.body);
 
     if (!match) return null;
 
@@ -1754,7 +1754,7 @@ export function closeCommand(issue: GitHubIssue, label: string): number[] | null
 
 /** Комментарий-команда «/justai merge» отдельной строкой: слить PR задачи. */
 export function isMergeCommand(body: string, label: string): boolean {
-    return new RegExp(`^\\s*/${escapeRegExp(label)}\\s+merge\\s*$`, "im").test(body);
+    return new RegExp(`^[ \\t]*/${escapeRegExp(label)}[ \\t]+merge[ \\t]*$`, "im").test(body);
 }
 
 /**
@@ -1778,7 +1778,7 @@ export function followUpTarget(issue: GitHubIssue, label: string): number | null
 
 /** Комментарий-команда «/justai stop» (или pause) отдельной строкой. */
 export function isStopCommand(body: string, label: string): boolean {
-    return new RegExp(`^\\s*/${escapeRegExp(label)}\\s+(stop|pause)\\s*$`, "im").test(body);
+    return new RegExp(`^[ \\t]*/${escapeRegExp(label)}[ \\t]+(stop|pause)[ \\t]*$`, "im").test(body);
 }
 
 /** Текст правки без служебных строк «/justai …». */
