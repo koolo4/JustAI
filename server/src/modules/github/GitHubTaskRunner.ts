@@ -151,6 +151,25 @@ export class GitHubTaskRunner {
         this.deps.feed?.add(event);
     }
 
+    /**
+     * «#N» в командах: задача моста (её ветка) или любой pull request этого репозитория (его ветка) —
+     * так планировщик проверяет через ПК1 и PR, созданные не мостом. Без номера — основная ветка.
+     */
+    private async resolveTarget(target: number | undefined, state: StoredState): Promise<{ branch: string | undefined } | { error: string }> {
+        if (target === undefined) return { branch: undefined };
+
+        const task = state.tasks[target];
+        if (task) return { branch: task.branch };
+
+        const pull = await this.deps.client.getPullRequest(target).catch(() => null);
+
+        if (!pull) return { error: `#${target} — не задача JustAI и не pull request этого репозитория` };
+        if (!pull.sameRepo) return { error: `PR #${target} из форка: его ветки нет в этом репозитории` };
+        if (pull.state !== "open") return { error: `PR #${target} уже закрыт` };
+
+        return { branch: pull.head };
+    }
+
     /** Причина отказа для разрушительной команды (как у агента), иначе null. */
     private async dangerReason(command: string): Promise<string | null> {
         const classification = classifyCommand(command, await this.deps.permissions.readRules());
@@ -302,15 +321,15 @@ export class GitHubTaskRunner {
             if ((!appRequest && !e2eRequest) || state.followUps?.includes(issue.number)) continue;
 
             const target = appRequest?.target ?? e2eRequest?.target;
-            const task = target === undefined ? undefined : state.tasks[target];
+            const resolved = await this.resolveTarget(target, state);
 
-            if (target !== undefined && !task) {
-                await this.soft(client.comment(issue.number, `Задача #${target} не найдена в этом JustAI — команда не выполнена.`), "comments");
+            if ("error" in resolved) {
+                await this.soft(client.comment(issue.number, `⚠️ **JustAI**: ${resolved.error} — команда не выполнена.`), "comments");
             }
             else if (appRequest) {
-                if (!(await this.appAction(issue.number, appRequest.action, task?.branch))) return;
+                if (!(await this.appAction(issue.number, appRequest.action, resolved.branch))) return;
             }
-            else if (!(await this.runE2E(issue.number, task?.branch, issue.body, e2eRequest!.files))) {
+            else if (!(await this.runE2E(issue.number, resolved.branch, issue.body, e2eRequest!.files))) {
                 return;
             }
 
@@ -431,10 +450,10 @@ export class GitHubTaskRunner {
                 continue;
             }
 
-            const target = request.target === undefined ? undefined : state.tasks[request.target];
-            const done = request.target !== undefined && !target
-                ? await this.soft(client.comment(issue.number, `Задача #${request.target} не найдена в этом JustAI — команда не выполнена.`), "comments").then(() => true)
-                : await this.runCommand(issue.number, target?.branch, request.command);
+            const resolved = await this.resolveTarget(request.target, state);
+            const done = "error" in resolved
+                ? await this.soft(client.comment(issue.number, `⚠️ **JustAI**: ${resolved.error} — команда не выполнена.`), "comments").then(() => true)
+                : await this.runCommand(issue.number, resolved.branch, request.command);
 
             if (!done) return;
 

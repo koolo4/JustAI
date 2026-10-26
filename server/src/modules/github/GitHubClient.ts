@@ -120,6 +120,18 @@ export class GitHubClient {
         }
     }
 
+    /** PR по номеру; sameRepo — ветка в этом же репозитории (из форка ветку на ПК1 не взять). */
+    public async getPullRequest(number: number): Promise<(GitHubPullRequest & { sameRepo: boolean }) | null> {
+        try {
+            const raw = await this.request<RawPull & { head: { ref: string; repo: { full_name: string } | null } }>(`${this.base}/pulls/${number}`);
+            return { ...toPull(raw), sameRepo: raw.head.repo?.full_name.toLowerCase() === this.repo.toLowerCase() };
+        }
+        catch (error) {
+            if (error instanceof GitHubError && error.status === 404) return null;
+            throw error;
+        }
+    }
+
     public async findPullRequest(head: string): Promise<GitHubPullRequest | null> {
         const owner = this.repo.split("/")[0]!;
         const items = await this.request<RawPull[]>(`${this.base}/pulls?state=open&head=${encodeURIComponent(`${owner}:${head}`)}`);

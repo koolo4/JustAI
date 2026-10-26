@@ -87,6 +87,13 @@ class FakeGitHub {
         issue.labels = issue.labels.filter(item => item !== label);
     }
 
+    /** PR, созданные не мостом (например, планировщиком), — для «#N» в командах. */
+    public foreignPulls: Array<{ number: number; head: string; sameRepo: boolean; state: string }> = [];
+    public async getPullRequest(number: number) {
+        const pull = this.foreignPulls.find(item => item.number === number);
+        return pull ? { number, url: `https://github.com/me/project/pull/${number}`, head: pull.head, state: pull.state, sameRepo: pull.sameRepo } : null;
+    }
+
     public async findPullRequest(head: string) {
         const pull = this.pulls.find(item => item.head === head);
         return pull ? { number: pull.number, url: pull.url, head, state: "open" } : null;
@@ -627,6 +634,40 @@ describe.skipIf(!git.available)("GitHubTaskRunner", () => {
         // Пока шли задача и команда, компьютер держали бодрым; после — отпустили.
         expect(awake.total).toBe(2);
         expect(awake.held).toBe(0);
+    }, 90_000);
+
+    it("runs commands on the branch of any pull request of the repository, not only bridge tasks", async () => {
+        // PR #113 сделал сам планировщик в ветке arena/feature — проверить его через ПК1.
+        run(root, "checkout", "-b", "arena/feature");
+        await writeFile(path.join(root, "feature.txt"), "from planner");
+        run(root, "add", "feature.txt");
+        run(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "planner work");
+        run(root, "push", "origin", "HEAD:refs/heads/arena/feature");
+        run(root, "checkout", "main");
+        github.foreignPulls.push({ number: 113, head: "arena/feature", sameRepo: true, state: "open" }, { number: 114, head: "x", sameRepo: false, state: "open" });
+
+        const bridge = new GitHubTaskRunner({
+            client: github as unknown as GitHubClient,
+            git,
+            sessions,
+            permissions: new PermissionService({ rulesFile: path.join(root, ".justai", "p10.json"), emit: () => undefined }),
+            workspaceRoot: root,
+            processes: new ProcessManager(),
+            config: { label: "justai", allowedUsers: [], profile: "coder", provider: "mock", pollMs: 60_000, allowPublic: false, token: "" },
+        });
+
+        github.issue(120, "Run", "me", { labels: [], body: "/justai run #113 node -p \"require('fs').existsSync('feature.txt')\"" });
+        await bridge.check();
+        expect(github.comments.get(120)![0]!.body).toContain("ветке `arena/feature`");
+        expect(github.comments.get(120)![0]!.body).toMatch(/код выхода 0[\s\S]*true/);
+
+        github.issue(121, "Run", "me", { labels: [], body: "/justai run #114 node -v" });
+        await bridge.check();
+        expect(github.comments.get(121)![0]!.body).toContain("из форка");
+
+        github.issue(122, "Run", "me", { labels: [], body: "/justai run #999 node -v" });
+        await bridge.check();
+        expect(github.comments.get(122)![0]!.body).toContain("не задача JustAI и не pull request");
     }, 90_000);
 
     it("does not count a test as PASS without a verdict, actions or the screenshots it asked for", () => {
