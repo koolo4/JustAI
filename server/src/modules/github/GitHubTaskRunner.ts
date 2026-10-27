@@ -85,8 +85,13 @@ interface TaskState {
     checks?: VerificationOutcome["status"];
     /** Ветка, от которой сделана ветка задачи и в которую открыт PR («Base: #N»); нет — основная. */
     base?: string;
-    /** Модель была недоступна: задача продолжится сама, когда модель ответит (одно сообщение в issue, а не на каждый повтор). */
+    /**
+     * Модель (или сеть до GitHub) была недоступна: задача продолжится сама, когда они ответят
+     * (одно сообщение в issue, а не на каждый повтор).
+     */
     waitingModel?: boolean;
+    /** Сколько попыток подряд оборвались недоступностью модели или сети: после MAX_MODEL_RETRIES задача проваливается. */
+    retries?: number;
 }
 
 interface StoredState {
@@ -124,6 +129,12 @@ const MODEL_BACK_NOTE = "The model was unavailable for a while and your previous
 
 /** Через сколько снова пробовать модель, которая не ответила. */
 const MODEL_RETRY_MS = 5 * 60_000;
+
+/** После перезапуска зависшего процесса модели — повтор почти сразу (модель загружается ~10 с). */
+const MODEL_RETRY_AFTER_HEAL_MS = 30_000;
+
+/** Сколько попыток подряд ждать модель (или сеть), прежде чем провалить задачу: раньше #143 повторялась всю ночь. */
+const MAX_MODEL_RETRIES = 6;
 
 /**
  * Ошибка доступа к модели, а не к задаче: сервер не запущен, завис, перегружен или упёрся в лимит запросов.
@@ -258,6 +269,8 @@ export class GitHubTaskRunner {
             feed?: { add(event: Omit<BridgeEvent, "id" | "time">): unknown };
             /** Не давать компьютеру уснуть, пока идёт работа (см. config.keepAwake). */
             keepAwake?: { acquire(): () => void };
+            /** Перезапустить зависший процесс локальной модели; true — перезапущен. */
+            healModel?: () => Promise<boolean>;
             log?: (message: string) => void;
         },
     ) {
@@ -358,6 +371,18 @@ export class GitHubTaskRunner {
             else if (still.length !== deps.length) state.waiting![issue] = still;
         }
 
+        // Метка «в работе» без работы: её не сняли из-за сбоя сети (так #137 «working», а stop отвечал «не выполняется»).
+        // Задача, ждущая модель, остаётся «working» в файле, но меткой показывается как ожидающая.
+        for (const issue of open) {
+            const task = state.tasks[issue.number];
+
+            if (!task || !issue.labels.includes(LABELS.working) || (task.status === "working" && !task.waitingModel)) continue;
+
+            await this.soft(client.removeLabel(issue.number, LABELS.working), "labels");
+            const proper = task.status === "review" ? LABELS.review : task.status === "failed" ? LABELS.failed : task.status === "paused" ? LABELS.paused : null;
+            if (proper && !issue.labels.includes(proper)) await this.soft(client.addLabels(issue.number, [proper]), "labels");
+        }
+
         // После перезапуска «последняя сессия» берётся из сохранённого состояния — кнопка «Смотреть» доступна сразу.
         if (!this.status.lastSessionId) {
             const latest = Object.entries(state.tasks).filter(([, task]) => task.sessionId).sort(([a], [b]) => Number(b) - Number(a))[0];
@@ -421,7 +446,7 @@ export class GitHubTaskRunner {
         const modelReady = this.modelDownUntil <= Date.now();
 
         if (!modelReady) {
-            this.status = { ...this.status, warning: `Модель не отвечает — задачи продолжатся после ${clock(this.modelDownUntil)}.` };
+            this.status = { ...this.status, warning: `Модель или сеть недоступны — задачи продолжатся после ${clock(this.modelDownUntil)}.` };
         }
 
         // «В работе» в файле, но не в этом процессе: задачу оборвал перезапуск JustAI (или ждёт модель). Если её уже
@@ -668,6 +693,21 @@ export class GitHubTaskRunner {
             }
         }
 
+        // «Base: #N» в правке к уже начатой задаче: ветку PR вливаем в ветку задачи, и PR задачи направляем в неё.
+        let mergeBase: { branch: string; from: number } | undefined;
+        const baseNotes: string[] = [];
+
+        if (previous && kind === "code") {
+            const from = feedback.map(item => baseTarget(item.body, config.label)).find(number => number !== null) ?? null;
+
+            if (from !== null) {
+                const resolved = await this.resolveTarget(from, state);
+
+                if ("error" in resolved) baseNotes.push(`строка «Base: #${from}» не применена: ${resolved.error}`);
+                else if (resolved.branch && resolved.branch !== base) mergeBase = { branch: resolved.branch, from };
+            }
+        }
+
         // Проверка смотрит ветку указанной задачи («/justai test #N») или основную.
         const branch = previous?.branch
             ?? (kind === "test" ? (testOf !== null ? state.tasks[testOf]?.branch : undefined) ?? base : `justai/issue-${issue.number}`);
@@ -705,6 +745,8 @@ export class GitHubTaskRunner {
             kind,
             ...(previous?.pullRequest ? { pullRequest: previous.pullRequest } : {}),
             ...(base !== defaultBase && kind === "code" ? { base } : {}),
+            // Ожидание модели переживает повтор: иначе сообщение в issue и счёт попыток начинались бы заново.
+            ...(previous?.waitingModel ? { waitingModel: true, retries: previous.retries ?? 0 } : {}),
         };
 
         state.tasks[issue.number] = task;
@@ -722,6 +764,25 @@ export class GitHubTaskRunner {
             }
             else {
                 await this.checkoutBranch(branch, base, Boolean(previous));
+            }
+
+            if (mergeBase) {
+                if (await this.mergeBranch(mergeBase.branch)) {
+                    base = mergeBase.branch;
+                    task.base = base;
+                    await this.save(state);
+                    const number = Number(task.pullRequest?.split("/").pop());
+                    if (number > 0) await this.soft(client.updatePullRequestBase(number, base), "pull requests");
+                    baseNotes.push(`в ветку задачи влита ветка \`${base}\` (PR #${mergeBase.from})${number > 0 ? `; PR задачи теперь направлен в неё` : ""}`);
+                }
+                else {
+                    baseNotes.push(`ветку \`${mergeBase.branch}\` (PR #${mergeBase.from}) не удалось влить без конфликтов — задача продолжается на прежней базе \`${base}\`; конфликт можно поручить агенту правкой`);
+                }
+            }
+
+            if (baseNotes.length) {
+                this.note({ kind: "note", issue: issue.number, title, text: capitalize(baseNotes.join("; ")) });
+                await this.soft(client.comment(issue.number, `ℹ️ **JustAI**: ${baseNotes.join("; ")}.`), "comments");
             }
 
             // С чего начался этот запуск: в отчёте «в этом запуске» отдельно от того, что уже было в ветке.
@@ -776,13 +837,19 @@ export class GitHubTaskRunner {
 
             const lastError = details.session.lastError ?? "";
             // Модель не ответила (сервер Ollama завис, не запущен, перегружен): задача не провалена — она подождёт.
-            const modelDown = !watch.stopped && details.session.status !== "completed" && isModelUnavailable(lastError);
+            // Но не бесконечно: после MAX_MODEL_RETRIES попыток подряд — провал с понятной причиной.
+            const unavailable = !watch.stopped && details.session.status !== "completed" && isModelUnavailable(lastError);
+            const retries = unavailable ? (task.retries ?? 0) + 1 : 0;
+            const modelDown = unavailable && retries <= MAX_MODEL_RETRIES;
 
             // Коммиты мог сделать и агент (например, слияние основной ветки для разрешения конфликта) — их тоже отправляем.
             const committed = await this.commit(issue, watch.stopped || modelDown ? "WIP: " : "") || await this.isAhead(branch);
+            // Работа уже на GitHub, а PR не создан (сбой сети после push) — PR создаётся при следующем запуске.
+            const unopened = !committed && !task.pullRequest
+                && (await this.git(["diff", "--stat", `refs/remotes/origin/${base}...HEAD`]).catch(() => "")).trim() !== "";
 
-            if (committed) {
-                await this.push(branch);
+            if (committed || unopened) {
+                if (committed) await this.push(branch);
                 const pull = await client.findPullRequest(branch)
                     ?? await client.createPullRequest(branch, base, `JustAI: ${cleanTitle(issue.title, this.deps.config.label)}`, `${clip(report, REPORT_CHARS)}\n\nCloses #${issue.number}\n\n${BOT_MARKER}`);
                 task.pullRequest = pull.url;
@@ -798,13 +865,16 @@ export class GitHubTaskRunner {
             if (modelDown) {
                 const first = !task.waitingModel;
                 task.waitingModel = true;
-                this.modelDownUntil = Date.now() + MODEL_RETRY_MS;
+                task.retries = retries;
+                // Зависший сервер модели (тайм-аут при простаивающей видеокарте) сам не оживает — перезапускаем процесс модели.
+                const healed = /timed? ?out/i.test(lastError) && this.deps.healModel ? await this.deps.healModel().catch(() => false) : false;
+                this.modelDownUntil = Date.now() + (healed ? MODEL_RETRY_AFTER_HEAL_MS : MODEL_RETRY_MS);
                 await watch.update("⏳ **JustAI**: модель не отвечает — задача продолжится сама.");
-                this.note({ kind: "note", issue: issue.number, title, text: `Модель не отвечает (${clip(lastError, 160)}). Задача продолжится сама после ${clock(this.modelDownUntil)}; сделанное сохранено.` });
+                this.note({ kind: "note", issue: issue.number, title, text: `Модель не отвечает (${clip(lastError, 160)})${healed ? "; процесс модели перезапущен" : ""}. Попытка ${retries} из ${MAX_MODEL_RETRIES}: продолжу после ${clock(this.modelDownUntil)}; сделанное сохранено.` });
 
                 if (first) {
                     await this.soft(client.comment(issue.number, [
-                        `⏳ **JustAI**: модель не отвечает (\`${clip(lastError, 300)}\`). Задача не провалена: она продолжится сама, когда модель снова ответит (проверка раз в ${MODEL_RETRY_MS / 60_000} мин).`,
+                        `⏳ **JustAI**: модель не отвечает (\`${clip(lastError, 300)}\`). Задача не провалена: она продолжится сама, когда модель снова ответит (до ${MAX_MODEL_RETRIES} попыток).${healed ? " Зависший процесс модели перезапущен." : ""}`,
                         `Сделанное: ${thisRun}${inBranch ? `; ${inBranch}` : ""}${where}.`,
                         `_Остановить: \`/${config.label} stop\`._`,
                     ].join("\n")), "comments");
@@ -814,6 +884,7 @@ export class GitHubTaskRunner {
             }
 
             delete task.waitingModel;
+            delete task.retries;
 
             // Агент только перечитывал файлы и ничего не менял — ждать час бесполезно, нужно решение планировщика.
             const blocked = !watch.stopped && lastError.startsWith("Blocked:");
@@ -858,6 +929,7 @@ export class GitHubTaskRunner {
                 `Ветка \`${branch}\`${base !== defaultBase ? ` (от \`${base}\`)` : ""}${where}`,
                 `**Факты по git:** ${thisRun}${inBranch ? `; ${inBranch}` : ""}.`,
                 lastError ? `**Почему остановился** (из лога): ${lastError}` : "",
+                unavailable ? `Модель не отвечала ${retries} попыток подряд — задача остановлена. Проверьте модель на ПК1 (\`ollama ps\`), затем \`/${config.label} continue #${issue.number}\`.` : "",
                 toolError ? `**Последняя ошибка инструмента** (из лога): ${toolError}` : "",
                 ...(checks ? ["", checksReport(checks)] : []),
                 ...(stat ? ["", `**Изменения в ветке** относительно \`${base}\` (по git, не со слов агента):`, fenced(clip(stat, 2_000))] : []),
@@ -885,11 +957,27 @@ export class GitHubTaskRunner {
             });
         }
         catch (error) {
-            task.status = "failed";
-            this.note({ kind: "failed", issue: issue.number, title, ...(task.sessionId ? { sessionId: task.sessionId } : {}), text: `Ошибка: ${clip(message(error), 300)}` });
-            this.status = { ...this.status, state: "error", lastError: message(error) };
-            await client.comment(issue.number, `⚠️ **JustAI** failed: ${clip(message(error), 1_000)}`).catch(() => undefined);
-            await client.addLabels(issue.number, [LABELS.failed]).catch(() => undefined);
+            const reason = message(error);
+            const retries = (task.retries ?? 0) + 1;
+
+            // Сбой сети или GitHub посреди задачи («fetch failed» при push или комментарии) — не провал задачи:
+            // она продолжится сама, как при недоступной модели. Раньше задача становилась failed с зависшей меткой «working».
+            if (kind === "code" && isModelUnavailable(reason) && retries <= MAX_MODEL_RETRIES) {
+                task.status = "working";
+                task.waitingModel = true;
+                task.retries = retries;
+                this.modelDownUntil = Date.now() + MODEL_RETRY_MS;
+                this.note({ kind: "note", issue: issue.number, title, text: `Сбой сети или GitHub (${clip(reason, 160)}). Попытка ${retries} из ${MAX_MODEL_RETRIES}: продолжу после ${clock(this.modelDownUntil)}.` });
+            }
+            else {
+                task.status = "failed";
+                delete task.waitingModel;
+                delete task.retries;
+                this.note({ kind: "failed", issue: issue.number, title, ...(task.sessionId ? { sessionId: task.sessionId } : {}), text: `Ошибка: ${clip(reason, 300)}` });
+                this.status = { ...this.status, state: "error", lastError: reason };
+                await client.comment(issue.number, `⚠️ **JustAI** не смог выполнить задачу: ${clip(reason, 1_000)}`).catch(() => undefined);
+                await client.addLabels(issue.number, [LABELS.failed]).catch(() => undefined);
+            }
         }
         finally {
             permissions.setUnattended(task.sessionId, false);
@@ -897,8 +985,8 @@ export class GitHubTaskRunner {
             await this.cleanupSession(task.sessionId);
             // Проверка ничего не меняет: всё, что после неё осталось в папке, — её следы.
             if (kind === "test") await this.discardChanges().catch(() => undefined);
-            // Упавшая задача не должна оставлять файлы в папке: иначе следующие задачи упираются в «грязную» папку.
-            if (kind === "code" && task.status === "failed") await this.saveFailedWork(issue, branch);
+            // Упавшая или отложенная задача не должна оставлять файлы в папке: иначе следующие задачи упираются в «грязную» папку.
+            if (kind === "code" && (task.status === "failed" || task.waitingModel)) await this.saveFailedWork(issue, branch);
             await this.git(["checkout", defaultBase]).catch(() => undefined);
             await this.save(state);
             release();
@@ -1666,7 +1754,37 @@ export class GitHubTaskRunner {
 
         const remoteBranch = existing && (await this.git(["ls-remote", "--heads", "origin", branch], true)).trim() !== "";
 
+        // Локальные коммиты, которые не ушли на GitHub (сбой сети на push), не теряются: ветка берётся как есть,
+        // если она уже содержит всё с GitHub, — отправятся вместе со следующими.
+        if (existing) {
+            const local = (await this.git(["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).catch(() => "")).trim();
+            const upstream = remoteBranch ? `refs/remotes/origin/${branch}` : `refs/remotes/origin/${base}`;
+            const unpushed = local && (await this.git(["rev-list", "--count", `${upstream}..${local}`]).catch(() => "0")).trim() !== "0";
+            const containsRemote = local && await this.git(["merge-base", "--is-ancestor", upstream, local]).then(() => true, () => false);
+
+            if (unpushed && containsRemote) {
+                await this.git(["checkout", branch]);
+                return;
+            }
+        }
+
         await this.git(["checkout", "-B", branch, remoteBranch ? `origin/${branch}` : `origin/${base}`]);
+    }
+
+    /** Влить ветку с GitHub в текущую; конфликт — слияние отменяется, false. */
+    private async mergeBranch(source: string): Promise<boolean> {
+        const identity = (await this.git(["config", "user.email"]).catch(() => "")).trim()
+            ? []
+            : ["-c", "user.name=JustAI", "-c", "user.email=justai@users.noreply.github.com"];
+
+        try {
+            await this.git([...identity, "merge", "--no-edit", "-m", `JustAI: влита ветка ${source}`, `refs/remotes/origin/${source}`]);
+            return true;
+        }
+        catch {
+            await this.git(["merge", "--abort"]).catch(() => undefined);
+            return false;
+        }
     }
 
     /** Закоммитить всё, что сделал агент. false — изменений нет. */
@@ -1983,7 +2101,9 @@ export function statusReport(state: StoredState, openNumbers: Set<number>, keepA
         `🟢 **JustAI** на связи: ${new Date().toISOString()}. Задачи берутся по одной, опрос GitHub раз в минуту.`,
         `Сон ПК: ${keepAwake === "always" ? "запрещён всё время, пока включён мост" : keepAwake === "off" ? "не управляется JustAI" : "запрещён только во время задачи — между задачами ПК может уснуть, и мост замолчит до пробуждения"}.`,
         "",
-        line("в работе", by("working")),
+        line("в работе", open.filter(([, task]) => task.status === "working" && !task.waitingModel).map(([issue]) => `#${issue}`)),
+        line("ждут модель или сеть (продолжатся сами)", open.filter(([, task]) => task.status === "working" && task.waitingModel)
+            .map(([issue, task]) => `#${issue} (попытка ${task.retries ?? 1} из ${MAX_MODEL_RETRIES})`)),
         line("готов PR", by("review")),
         line("не удалось", by("failed")),
         line("на паузе", by("paused")),

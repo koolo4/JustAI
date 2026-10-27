@@ -17,6 +17,7 @@ import {
     FileSavedEvent,
 } from "../core/events/index.js";
 import { addGitToPath, GitService } from "../infrastructure/git/GitService.js";
+import { isLocalOllama, restartOllamaRunner } from "../infrastructure/ollama/OllamaRunner.js";
 import { BrowserService } from "../infrastructure/browser/BrowserService.js";
 import { createBrowserTools } from "../modules/agent/tools/browserTools.js";
 import { SnapshotService } from "../infrastructure/git/SnapshotService.js";
@@ -455,6 +456,10 @@ export class Container {
                 keepAwake: this.keepAwake,
                 e2eBrowser: this.browserService,
                 feed: this.bridgeLog,
+                // Свою Ollama мост может «оживить», перезапустив процесс модели; удалённую — нет.
+                ...((process.env.JUSTAI_GITHUB_PROVIDER || "ollama") === "ollama" && isLocalOllama(process.env.OLLAMA_BASE_URL)
+                    ? { healModel: () => restartOllamaRunner() }
+                    : {}),
                 config: {
                     ...(Number(process.env.JUSTAI_APP_IDLE_MIN) > 0 ? { appIdleMinutes: Number(process.env.JUSTAI_APP_IDLE_MIN) } : {}),
                     keepAwake: keepAwakeModeFromEnv(process.env.JUSTAI_KEEP_AWAKE),

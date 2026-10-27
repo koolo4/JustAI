@@ -142,6 +142,11 @@ export class GitHubClient {
         return toPull(await this.request<RawPull>(`${this.base}/pulls`, { method: "POST", body: { head, base, title, body } }));
     }
 
+    /** Сменить ветку, в которую открыт PR (например, правки к другому PR — в его ветку). */
+    public async updatePullRequestBase(number: number, base: string): Promise<void> {
+        await this.request(`${this.base}/pulls/${number}`, { method: "PATCH", body: { base } });
+    }
+
     /** Слить PR. 405 — не готов к слиянию (конфликт, обязательные проверки), 409 — ветка изменилась. */
     public async mergePullRequest(number: number, title: string, method: "squash" | "merge" | "rebase" = "squash"): Promise<void> {
         await this.request(`${this.base}/pulls/${number}/merge`, { method: "PUT", body: { merge_method: method, commit_title: title } });

@@ -105,6 +105,13 @@ class FakeGitHub {
         return { number: pull.number, url: pull.url, head, state: "open" };
     }
 
+    public rebased: Array<{ number: number; base: string }> = [];
+    public async updatePullRequestBase(number: number, base: string) {
+        this.rebased.push({ number, base });
+        const pull = this.pulls.find(item => item.number === number);
+        if (pull) pull.base = base;
+    }
+
     /** Слияние: «GitHub» переносит основную ветку на ветку PR (в тестах она всегда от основной). */
     public onMerge?: (head: string) => void;
     public merged: number[] = [];
@@ -721,6 +728,102 @@ describe.skipIf(!git.available)("GitHubTaskRunner", () => {
         await runner.check();
         expect(runner.getStatus().tasks.find(task => task.issue === 160)).toMatchObject({ status: "review" });
         expect(github.comments.get(160)!.filter(item => item.body.includes("Задача не провалена"))).toHaveLength(1);
+    }, 90_000);
+
+    it("restarts a hung local model on a timeout and gives up after a few attempts instead of retrying all night", async () => {
+        const { MockProvider } = await import("../../../src/modules/agent/providers/MockProvider.js");
+        const real = MockProvider.prototype.stream;
+        MockProvider.prototype.stream = function () {
+            return (async function* () { throw new Error("Request timed out."); })();
+        } as typeof real;
+
+        let heals = 0;
+        const bridge = new GitHubTaskRunner({
+            client: github as unknown as GitHubClient,
+            git,
+            sessions,
+            permissions: new PermissionService({ rulesFile: path.join(root, ".justai", "p-heal.json"), emit: () => undefined }),
+            workspaceRoot: root,
+            healModel: async () => { heals += 1; return true; },
+            config: { label: "justai", allowedUsers: [], profile: "coder", provider: "mock", pollMs: 60_000, allowPublic: false, token: "" },
+        });
+        const retryNow = () => { (bridge as unknown as { modelDownUntil: number }).modelDownUntil = 0; };
+
+        try {
+            github.issue(165, "создай файл h.txt");
+
+            for (let attempt = 1; attempt <= 6; attempt += 1) {
+                await bridge.check();
+                retryNow();
+            }
+
+            expect(heals).toBe(6);
+            // Одно сообщение «⏳» на все попытки, а не по сообщению на каждую.
+            expect(github.comments.get(165)!.filter(item => item.body.includes("Задача не провалена"))).toHaveLength(1);
+            expect(bridge.getStatus().tasks.find(task => task.issue === 165)).toMatchObject({ status: "working" });
+
+            // Седьмая подряд — провал с понятной причиной.
+            await bridge.check();
+            expect(bridge.getStatus().tasks.find(task => task.issue === 165)).toMatchObject({ status: "failed" });
+            expect(github.comments.get(165)!.at(-1)!.body).toContain("Модель не отвечала 7 попыток подряд");
+            expect(github.issues.find(item => item.number === 165)!.labels).toContain(LABELS.failed);
+        }
+        finally {
+            MockProvider.prototype.stream = real;
+            await bridge.stop();
+        }
+    }, 120_000);
+
+    it("does not fail a task on a network error to GitHub: it continues by itself and keeps local commits", async () => {
+        const realFind = github.findPullRequest.bind(github);
+        let failures = 1;
+        github.findPullRequest = async (head: string) => {
+            if (failures-- > 0) throw new TypeError("fetch failed");
+            return realFind(head);
+        };
+
+        github.issue(166, "создай файл net.txt");
+        await runner.check();
+        expect(runner.getStatus().tasks.find(task => task.issue === 166)).toMatchObject({ status: "working" });
+        expect(github.issues.find(item => item.number === 166)!.labels).not.toContain(LABELS.failed);
+
+        (runner as unknown as { modelDownUntil: number }).modelDownUntil = 0;
+        await runner.check();
+        expect(runner.getStatus().tasks.find(task => task.issue === 166)).toMatchObject({ status: "review" });
+        expect(run(remote, "ls-tree", "--name-only", "justai/issue-166")).toContain("net.txt");
+    }, 90_000);
+
+    it("removes a stale «working» label left by a network failure", async () => {
+        const fs = await import("node:fs/promises");
+        const stateFile = path.join(root, ".justai", "github-state.json");
+        await fs.mkdir(path.dirname(stateFile), { recursive: true });
+        await fs.writeFile(stateFile, JSON.stringify({ tasks: { "167": { sessionId: "", branch: "justai/issue-167", status: "failed", lastCommentId: 0, kind: "code" } } }));
+
+        github.issue(167, "Задача", "me", { labels: ["justai", LABELS.working] });
+        await runner.check();
+
+        expect(github.issues.find(item => item.number === 167)!.labels).toEqual(["justai", LABELS.failed]);
+    });
+
+    it("merges a pull request's branch into a started task when a follow-up says «Base: #N»", async () => {
+        github.issue(180, "создай файл base.txt");
+        await runner.check();
+        expect(github.pulls[0]).toMatchObject({ head: "justai/issue-180", base: "main" });
+
+        run(root, "checkout", "-b", "arena/feature", "main");
+        await writeFile(path.join(root, "feature.txt"), "from planner");
+        run(root, "add", "feature.txt");
+        run(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "planner work");
+        run(root, "push", "origin", "HEAD:refs/heads/arena/feature");
+        run(root, "checkout", "main");
+        github.foreignPulls.push({ number: 113, head: "arena/feature", sameRepo: true, state: "open" });
+
+        github.issue(181, "Continue", "me", { labels: [], body: "/justai continue #180\nBase: #113\nсоздай файл more.txt" });
+        await runner.check();
+
+        expect(run(remote, "ls-tree", "--name-only", "justai/issue-180")).toContain("feature.txt");
+        expect(github.rebased).toEqual([{ number: 100, base: "arena/feature" }]);
+        expect(github.comments.get(180)!.some(item => item.body.includes("влита ветка `arena/feature`"))).toBe(true);
     }, 90_000);
 
     it("checks the format of a branch's e2e scenarios without starting anything («/justai e2e check»)", async () => {
