@@ -21,6 +21,8 @@ export interface CompatiblePreset {
     headers?: Record<string, string>;
     /** Ключ необязателен (например, резерв может указывать на локальный сервер). */
     keyOptional?: boolean;
+    /** reasoning_effort по умолчанию (переопределяется <PREFIX>_REASONING_EFFORT). */
+    reasoningEffort?: string;
 }
 
 /** Резервные «эксперты»: любой OpenAI-совместимый сервер, задаётся целиком через env. */
@@ -50,6 +52,8 @@ export const COMPATIBLE_PRESETS: CompatiblePreset[] = [
         defaultModel: "qwen3.5:9b",
         local: true,
         contextTokens: 32_768,
+        // Без размышлений qwen3 в разы быстрее и не тратит на них небольшое окно.
+        reasoningEffort: "none",
     },
     {
         id: "lmstudio",
@@ -157,7 +161,7 @@ export function resolvePreset(preset: CompatiblePreset, env: NodeJS.ProcessEnv, 
         // Локальные модели медленные: длинный ответ — чаще всего зацикливание.
         maxOutputTokens: Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : (preset.local ? 4096 : 8192),
         contextTokens: Number.isFinite(context) && context > 0 ? context : preset.contextTokens,
-        reasoningEffort: env[`${preset.prefix}_REASONING_EFFORT`] || undefined,
+        reasoningEffort: env[`${preset.prefix}_REASONING_EFFORT`]?.trim() || preset.reasoningEffort,
         configured: Boolean(resolvedModel) && Boolean(baseURL) && (preset.local || preset.keyOptional === true || Boolean(apiKey)),
     };
 }

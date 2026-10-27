@@ -31,7 +31,7 @@ npm run dev:web                      # фронт на http://localhost:3000
 $env:OLLAMA_CONTEXT_LENGTH=9216; $env:OLLAMA_FLASH_ATTENTION=1; $env:OLLAMA_KV_CACHE_TYPE="q8_0"; $env:OLLAMA_KEEP_ALIVE="30m"; $env:OLLAMA_MAX_LOADED_MODELS=1; $env:OLLAMA_NUM_PARALLEL=1; ollama serve
 ```
 Эти переменные заданы и в переменных среды пользователя Windows — их видит и Ollama, запущенная из трея.
-`OLLAMA_CONTEXT` в `server/.env` должен совпадать с `OLLAMA_CONTEXT_LENGTH`. Для qwen3 без «размышлений» (в разы быстрее): `OLLAMA_REASONING_EFFORT=none`.
+`OLLAMA_CONTEXT` в `server/.env` должен совпадать с `OLLAMA_CONTEXT_LENGTH`. «Размышления» Ollama выключены по умолчанию (в разы быстрее); включить — `OLLAMA_REASONING_EFFORT=low|medium|high` в `server/.env`.
 При перезапуске Ollama завершать и `llama-server.exe`: он может остаться сиротой и держать память и CPU.
 Папку проекта для агента выбирают в интерфейсе (кнопка 📁 в верхней панели; по умолчанию — корень этого репозитория). `JUSTAI_WORKSPACE` фиксирует папку и выключает переключение.
 

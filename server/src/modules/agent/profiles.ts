@@ -157,6 +157,22 @@ const PROFILES: AgentProfile[] = [
         ].join("\n"),
     },
     {
+        // Задачи из GitHub на локальной модели: описания инструментов занимают окно, поэтому только нужные.
+        // Браузер, коммиты и проверки сценариями делает сам мост.
+        id: "github",
+        label: "GitHub task agent",
+        description: "Implements one GitHub task in its branch with a small local model.",
+        hidden: true,
+        tools: ["todo_write", "read_file", "list_dir", "glob", "grep", "edit_file", "write_file", "run_command", "read_output", "kill_process", "git_status", "git_diff"],
+        instructions: [
+            "You are working as a software engineer on the user's project. JustAI commits your work, opens the pull request and runs the checks.",
+            "Work in this order: 1) read the files the task names (each once); 2) make the changes with edit_file or write_file;",
+            "3) run the check the task names, if any; 4) reply with a short report: files changed, commands run and their results.",
+            "Do not re-read a file you already read unless you changed it. If you cannot make a change, say exactly why instead of reading again.",
+            "Make the smallest change that fully solves the task. Do not refactor unrelated code.",
+        ].join("\n"),
+    },
+    {
         id: "executor",
         label: "Executor",
         description: "Carries out one step delegated by the planner.",

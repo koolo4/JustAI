@@ -42,7 +42,15 @@ export interface OpenAICompatibleOptions {
      * (у qwen3 в Ollama это в разы быстрее; think:false и /no_think сервер игнорирует).
      */
     reasoningEffort?: string;
+    /**
+     * Локальный сервер (Ollama, LM Studio): лимитов у него нет, поэтому повторы бессмысленны, а зависший сервер
+     * не должен держать задачу полчаса (4 повтора × 10 минут ожидания по умолчанию).
+     */
+    local?: boolean;
 }
+
+/** Сколько ждать начала ответа локального сервера: загрузка модели и чтение длинного промпта укладываются. */
+const LOCAL_TIMEOUT_MS = 5 * 60_000;
 
 /**
  * Провайдер для серверов с OpenAI Chat Completions API: Ollama, LM Studio, OpenRouter,
@@ -90,7 +98,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
             baseURL: options.baseURL,
             // Локальным серверам ключ не нужен, но SDK требует непустую строку.
             apiKey: options.apiKey || "not-needed",
-            maxRetries: 4,
+            ...(options.local ? { maxRetries: 1, timeout: LOCAL_TIMEOUT_MS } : { maxRetries: 4 }),
             ...(options.headers ? { defaultHeaders: options.headers } : {}),
         });
     }

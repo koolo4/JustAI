@@ -25,7 +25,7 @@ import { toToolSpec } from "../tools/ToolRegistry.js";
 import { DELEGATE_TOOL } from "../tools/delegateTool.js";
 import { Budget, type BudgetLimits } from "./Budget.js";
 import { applyCompaction, chooseCut, summarizeHistory, type Compaction } from "./Compactor.js";
-import { contextBudget, fitToContextWindow } from "./ContextWindow.js";
+import { CLEARED_TOOL_OUTPUT, contextBudget, fitToContextWindow } from "./ContextWindow.js";
 import { formatVerificationFailure, type VerificationOutcome } from "./Verifier.js";
 
 const DEFAULT_VERIFY_ATTEMPTS = 3;
@@ -108,6 +108,19 @@ export class AgentLoop {
     /** Неудачные вызовы (инструмент + вход) → сколько раз провалились с последнего успешного изменения. */
     private readonly failedCalls = new Map<string, number>();
 
+    /** Поправка оценки токенов (см. ContextWindowOptions.scale) и оценка последнего запроса. */
+    private tokenScale = 1;
+    private lastEstimate = 0;
+
+    /** Что модель видела в последнем запросе: по нему понятно, на месте ли ещё прочитанный файл. */
+    private lastView: Message[] = [];
+
+    /** Прочитанные в этом прогоне файлы (путь + фрагмент), без изменений после чтения. */
+    private readonly readSinceChange = new Set<string>();
+
+    /** Сколько раз модель пыталась перечитать файл, содержимое которого у неё и так перед глазами. */
+    private blockedReads = 0;
+
     constructor(
         private readonly options: AgentLoopOptions,
     ) {
@@ -158,6 +171,7 @@ export class AgentLoop {
 
             outputRetries = 0;
             this.budget.record(turn.usage);
+            this.calibrate(turn.usage);
 
             this.options.emit({
                 type: "budget.updated",
@@ -292,6 +306,11 @@ export class AgentLoop {
                 ))
                 : await this.executeTools(toolUses);
 
+            if (this.blockedReads >= MAX_BLOCKED_READS) {
+                await add(createMessage("user", results));
+                return this.result("failed", `Blocked: the agent kept re-reading files it had already read (${this.blockedReads} times) without changing anything. A decision is needed: give exact replacements, or split the task.`);
+            }
+
             // Один и тот же неудачный вызов подряд — модель зациклилась: подсказать, а потом остановить.
             const repeats = this.trackRepeatedFailure(toolUses, results);
 
@@ -405,6 +424,7 @@ export class AgentLoop {
         const window = this.options.provider.contextWindow;
 
         if (!window) {
+            this.lastView = messages;
             return messages;
         }
 
@@ -413,12 +433,15 @@ export class AgentLoop {
             reserveForOutput: window.reserveForOutput,
             system: this.options.system,
             tools,
+            scale: this.tokenScale,
         };
 
         let base = applyCompaction(messages, this.compaction);
         let fit = fitToContextWindow(base, options);
 
-        if (fit.dropped > 0 && this.options.onCompaction) {
+        // На маленьком окне пересказ моделью вреден: он сам занимает окно, идёт отдельным долгим вызовом
+        // и теряет только что прочитанное — модель перечитывает файлы по кругу. Там хватает журнала шагов.
+        if (fit.dropped > 0 && this.options.onCompaction && window.tokens >= MODEL_SUMMARY_MIN_WINDOW) {
             try {
                 const budget = contextBudget(options);
                 const cut = chooseCut(base, Math.floor(budget / 2));
@@ -447,7 +470,39 @@ export class AgentLoop {
             }
         }
 
+        this.lastEstimate = fit.estimatedTokens;
+        this.lastView = fit.messages;
         return fit.messages;
+    }
+
+    /** Результат прошлого чтения этого файла (того же фрагмента) ещё есть в том, что видела модель. */
+    private readStillVisible(key: string): boolean {
+        const uses = new Set<string>();
+
+        for (const message of this.lastView) {
+            for (const block of message.content) {
+                if (block.type === "tool_use" && block.name === "read_file" && readFileKey(block.input) === key) {
+                    uses.add(block.id);
+                }
+                else if (block.type === "tool_result" && uses.has(block.toolUseId) && !block.isError && block.content !== CLEARED_TOOL_OUTPUT) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /** Поправка оценки: сколько токенов насчитал провайдер на самом деле против нашей оценки того же запроса. */
+    private calibrate(usage: Usage): void {
+        if (usage.inputTokens <= 0 || this.lastEstimate <= 0) return;
+
+        const ratio = (usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens) / this.lastEstimate;
+
+        // Совсем несоразмерный счёт (заглушка, провайдер считает не весь запрос) — не поправка, а шум.
+        if (ratio < 0.25) return;
+
+        this.tokenScale = Math.min(2, Math.max(0.5, ratio));
     }
 
     /**
@@ -543,6 +598,18 @@ export class AgentLoop {
             );
         }
 
+        const readKey = tool.name === "read_file" ? readFileKey(parsed.data) : undefined;
+
+        // Перечитывание файла, который не менялся и чьё содержимое ещё в контексте, ничего не даёт —
+        // так небольшие модели зацикливаются вместо правки. Если содержимое уже вытеснено из окна, читать можно.
+        if (readKey && this.readSinceChange.has(readKey) && this.readStillVisible(readKey)) {
+            this.blockedReads += 1;
+            return errorResult(
+                use.id,
+                `[JustAI] You already read ${readKey.split("#")[0]} in this run and it has not changed since — its content is in the conversation above. Do not read it again. Make the change now with edit_file or write_file, or, if you cannot, reply with the exact reason.`,
+            );
+        }
+
         if (this.options.authorizer) {
             const decision = await this.options.authorizer.authorize({
                 sessionId,
@@ -600,6 +667,12 @@ export class AgentLoop {
         if (!isError && ((tool.kind === "write" && tool.changesFiles !== false) || tool.name === DELEGATE_TOOL)) {
             this.changedSinceVerify = true;
             this.wroteThisRun = true;
+        }
+
+        if (!isError) {
+            if (readKey) this.readSinceChange.add(readKey);
+            // Правка или команда могла изменить файлы — прочитанное снова можно читать.
+            else if (tool.kind !== "read") this.readSinceChange.clear();
         }
 
         this.options.emit({
@@ -674,6 +747,22 @@ export function asksToBuild(text: string): boolean {
 /** Подсказка о зацикливании — на каждый 3-й одинаковый неудачный вызов; остановка — на 6-й. */
 const REPEAT_HINT_EVERY = 3;
 const MAX_REPEATED_FAILURES = 6;
+
+/** Сколько бесполезных перечитываний допустить, прежде чем остановить прогон как «заблокированный». */
+const MAX_BLOCKED_READS = 3;
+
+/** Окно, начиная с которого старые ходы пересказывает модель; на меньшем — только журнал шагов. */
+const MODEL_SUMMARY_MIN_WINDOW = 16_000;
+
+/** Ключ чтения: путь (без «./» и с прямыми слэшами) и фрагмент — чтение другой части файла не повтор. */
+function readFileKey(input: unknown): string | undefined {
+    const value = input as { path?: unknown; offset?: unknown; limit?: unknown } | null;
+
+    if (typeof value?.path !== "string") return undefined;
+
+    const file = value.path.trim().replace(/\\/g, "/").replace(/^(\.\/)+/, "");
+    return `${file}#${String(value.offset ?? 1)}:${String(value.limit ?? "")}`;
+}
 
 /** Сколько раз за прогон напоминать о невыполненных пунктах плана. */
 const MAX_PLAN_NUDGES = 2;

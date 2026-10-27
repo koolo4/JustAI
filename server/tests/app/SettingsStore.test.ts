@@ -60,8 +60,10 @@ describe("SettingsStore", () => {
         const keys = new SettingsStore(install.root, {}).view().fields.map(item => item.key);
 
         expect(keys).toEqual(expect.arrayContaining([
-            "JUSTAI_PROVIDER", "JUSTAI_EXECUTOR_PROVIDER", "ANTHROPIC_API_KEY", "OLLAMA_REASONING_EFFORT",
+            "JUSTAI_PROVIDER", "JUSTAI_EXECUTOR_PROVIDER", "ANTHROPIC_API_KEY",
             "RESERVE1_BASE_URL", "RESERVE1_API_KEY", "RESERVE2_MODEL", "JUSTAI_PROXY",
         ]));
+        // Размышления локальной модели выключены по умолчанию и в интерфейсе не меняются.
+        expect(keys).not.toContain("OLLAMA_REASONING_EFFORT");
     });
 });

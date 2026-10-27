@@ -61,11 +61,11 @@ describe("Compactor", () => {
 
     it("summarizes old turns once instead of dropping them when the window is full", async () => {
         const provider = Object.assign(new MockProvider([
-            { toolCalls: [{ name: "echo", input: { text: "a".repeat(1_500) } }] },
-            { toolCalls: [{ name: "echo", input: { text: "b".repeat(1_500) } }] },
+            { toolCalls: [{ name: "echo", input: { text: "a".repeat(15_000) } }] },
+            { toolCalls: [{ name: "echo", input: { text: "b".repeat(15_000) } }] },
             { text: "Goal: test. Done: echoed a." },
             { text: "done" },
-        ]), { contextWindow: { tokens: 1_200, reserveForOutput: 100 } });
+        ]), { contextWindow: { tokens: 16_000, reserveForOutput: 100 } });
 
         const saved: Message[] = [];
         const compactions: Compaction[] = [];

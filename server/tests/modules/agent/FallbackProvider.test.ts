@@ -153,6 +153,11 @@ describe("ProviderRegistry reserves", () => {
         expect(off.lastResort()).toBeNull();
         expect(off.create("groq")).not.toBeInstanceOf(FallbackProvider);
 
+        // Локальная модель не уходит в облачные резервы, даже если они настроены: её сбой — ошибка, а не повод слать код в облако.
+        const withReserve = new ProviderRegistry({ GROQ_API_KEY: "k", RESERVE1_BASE_URL: "https://example.invalid/v1", RESERVE1_MODEL: "free" });
+        expect(withReserve.create("groq")).toBeInstanceOf(FallbackProvider);
+        expect(withReserve.create("ollama")).not.toBeInstanceOf(FallbackProvider);
+
         // Не настроенный провайдер (LM Studio без модели) последним звеном не становится.
         expect(new ProviderRegistry({ JUSTAI_LAST_RESORT: "lmstudio" }).lastResort()).toBeNull();
     });

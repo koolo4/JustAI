@@ -68,7 +68,11 @@ export class ProviderRegistry {
         const reserves = [...this.configuredReserves(), ...(lastResort ? [lastResort] : [])]
             .filter((reserve, index, list) => reserve !== id && list.indexOf(reserve) === index);
 
-        if (id === "mock" || RESERVE_IDS.includes(id as typeof RESERVE_IDS[number]) || reserves.length === 0) {
+        // Локальная модель не исчерпывает токены, а при её сбое уход в облачные резервы отправлял туда код
+        // и упирался в их дневные лимиты (задачи из GitHub падали через полчаса с 429). Сбой локальной — это ошибка.
+        const local = findPreset(id)?.local === true;
+
+        if (id === "mock" || local || RESERVE_IDS.includes(id as typeof RESERVE_IDS[number]) || reserves.length === 0) {
             return primary;
         }
 
@@ -150,6 +154,7 @@ export class ProviderRegistry {
                     ...(resolved.reasoningEffort ? { reasoningEffort: resolved.reasoningEffort } : {}),
                     ...(preset.streamUsage === undefined ? {} : { streamUsage: preset.streamUsage }),
                     ...(preset.headers ? { headers: preset.headers } : {}),
+                    ...(preset.local ? { local: true } : {}),
                 });
             }
         }

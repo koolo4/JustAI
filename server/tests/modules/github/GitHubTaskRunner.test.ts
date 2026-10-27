@@ -25,7 +25,7 @@ import { ProcessManager } from "../../../src/infrastructure/process/ProcessManag
 import { BrowserService } from "../../../src/infrastructure/browser/BrowserService.js";
 import { Verifier } from "../../../src/modules/agent/runtime/Verifier.js";
 import {
-    appCommand, ARTIFACTS_BRANCH, checksReport, closeCommand, dependsOn, e2eCommand, testEvidence, followUpCommand, followUpTarget, GitHubTaskRunner, isMergeCommand, isStopCommand, isTask, isTestTask, LABELS, originMatches,
+    appCommand, ARTIFACTS_BRANCH, baseTarget, checksReport, isModelUnavailable, closeCommand, dependsOn, e2eCommand, testEvidence, followUpCommand, followUpTarget, GitHubTaskRunner, isMergeCommand, isStopCommand, isTask, isTestTask, LABELS, originMatches,
     progressReport, runCommentCommand, runIssueCommand, statusReport, stripCommands, taskPrompt, testTarget, testVerdict,
 } from "../../../src/modules/github/GitHubTaskRunner.js";
 
@@ -197,7 +197,8 @@ describe.skipIf(!git.available)("GitHubTaskRunner", () => {
         // Первый комментарий — отчёт о ходе работы (обновляется), последний — итоговый отчёт.
         expect(github.comments.get(1)![0]!.body).toContain("закончил");
         const report = github.comments.get(1)!.at(-1)!.body;
-        expect(report).toContain("finished this step");
+        expect(report).toContain("закончил этот шаг");
+        expect(report).toMatch(/Факты по git:\*\* в этом запуске изменено: 1 file changed/);
         expect(report).toContain("pull/100");
         expect(report).toContain(BOT_MARKER);
 
@@ -351,7 +352,7 @@ describe.skipIf(!git.available)("GitHubTaskRunner", () => {
         expect(slow.getStatus().tasks).toEqual([expect.objectContaining({ issue: 40, status: "paused" })]);
         expect(github.issues.find(item => item.number === 40)!.labels).toContain(LABELS.paused);
         expect(github.comments.get(40)![0]!.body).toContain("остановлен по команде");
-        expect(github.comments.get(40)!.at(-1)!.body).toContain("stopped on request");
+        expect(github.comments.get(40)!.at(-1)!.body).toContain("остановлен по команде");
 
         // Команда остановки — не правка: сама по себе работу не возобновляет.
         await slow.check();
@@ -659,6 +660,97 @@ describe.skipIf(!git.available)("GitHubTaskRunner", () => {
         expect(runner.getStatus().tasks.find(task => task.issue === 140)).toMatchObject({ status: "review" });
         expect(run(remote, "ls-tree", "--name-only", "justai/issue-140")).toContain("r.txt");
     }, 90_000);
+
+    it("builds a task with «Base: #N» on top of that pull request's branch and opens its PR into it", async () => {
+        // Правки к PR #113: ветка задачи — от его ветки, иначе файлов из PR в ней нет (так упала kaitos #132).
+        run(root, "checkout", "-b", "arena/feature");
+        await writeFile(path.join(root, "feature.txt"), "from planner");
+        run(root, "add", "feature.txt");
+        run(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "planner work");
+        run(root, "push", "origin", "HEAD:refs/heads/arena/feature");
+        run(root, "checkout", "main");
+        github.foreignPulls.push({ number: 113, head: "arena/feature", sameRepo: true, state: "open" });
+
+        github.issue(150, "создай файл fix.txt", "me", { body: "Поправить сценарий.\n\nBase: #113" });
+        await runner.check();
+
+        expect(run(remote, "ls-tree", "--name-only", "justai/issue-150")).toMatch(/feature\.txt[\s\S]*fix\.txt|fix\.txt[\s\S]*feature\.txt/);
+        expect(github.pulls).toEqual([expect.objectContaining({ head: "justai/issue-150", base: "arena/feature" })]);
+        // В отчёте только своё: относительно ветки PR изменился один файл.
+        expect(github.comments.get(150)!.at(-1)!.body).toMatch(/всего в ветке: 1 file changed/);
+        expect(run(root, "rev-parse", "--abbrev-ref", "HEAD").trim()).toBe("main");
+
+        // Неизвестная база — понятный отказ, а не задача на основной ветке.
+        github.issue(151, "создай файл y.txt", "me", { body: "Base: #999" });
+        await runner.check();
+        expect(github.comments.get(151)![0]!.body).toContain("Base: #999");
+        expect(runner.getStatus().tasks.find(task => task.issue === 151)).toMatchObject({ status: "failed" });
+    }, 90_000);
+
+    it("waits for a model that does not answer instead of failing the task, then continues by itself", async () => {
+        const { MockProvider } = await import("../../../src/modules/agent/providers/MockProvider.js");
+        const real = MockProvider.prototype.stream;
+        let calls = 0;
+        // Первый ход (правка файла) проходит, на втором модель перестаёт отвечать.
+        MockProvider.prototype.stream = function (this: InstanceType<typeof MockProvider>, request) {
+            calls += 1;
+            if (calls === 1) return real.call(this, request);
+            return (async function* () { throw new Error("Connection error. fetch failed"); })();
+        } as typeof real;
+
+        try {
+            github.issue(160, "создай файл m.txt");
+            await runner.check();
+
+            const comments = github.comments.get(160)!;
+            expect(comments.at(-1)!.body).toContain("модель не отвечает");
+            expect(github.issues.find(item => item.number === 160)!.labels).not.toContain(LABELS.failed);
+            expect(runner.getStatus().tasks.find(task => task.issue === 160)).toMatchObject({ status: "working" });
+
+            // Пока модель не ответила, новые задачи не начинаются (и не проваливаются).
+            github.issue(161, "создай файл n.txt");
+            await runner.check();
+            expect(runner.getStatus().tasks.find(task => task.issue === 161)).toBeUndefined();
+        }
+        finally {
+            MockProvider.prototype.stream = real;
+        }
+
+        // Модель вернулась: задача продолжается сама и доходит до PR.
+        (runner as unknown as { modelDownUntil: number }).modelDownUntil = 0;
+        await runner.check();
+        expect(runner.getStatus().tasks.find(task => task.issue === 160)).toMatchObject({ status: "review" });
+        expect(github.comments.get(160)!.filter(item => item.body.includes("Задача не провалена"))).toHaveLength(1);
+    }, 90_000);
+
+    it("checks the format of a branch's e2e scenarios without starting anything («/justai e2e check»)", async () => {
+        await import("node:fs/promises").then(fs => fs.mkdir(path.join(root, "tests", "e2e"), { recursive: true }));
+        await writeFile(path.join(root, "tests", "e2e", "good.yml"), "steps:\n  - click: '#a'\n  - expectVisible: '#b'\n");
+        await writeFile(path.join(root, "tests", "e2e", "bad.yml"), "steps:\n  - clik: '#a'\n");
+        run(root, "add", "tests");
+        run(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "scenarios");
+        run(root, "push", "origin", "HEAD:main");
+
+        github.issue(170, "Check", "me", { labels: [], body: "/justai e2e check" });
+        await runner.check();
+
+        const reply = github.comments.get(170)![0]!.body;
+        expect(reply).toContain("1 из 2 сценариев разобраны");
+        expect(reply).toMatch(/✓ \| `tests\/e2e\/good\.yml` \| 2 шаг/);
+        expect(reply).toMatch(/✕ \| `tests\/e2e\/bad\.yml` \| Step 1: unknown action "clik"/);
+        expect(github.closed).toContain(170);
+    }, 60_000);
+
+    it("tells model outages apart from task failures", () => {
+        expect(isModelUnavailable("Connection error.")).toBe(true);
+        expect(isModelUnavailable("429 Rate limit exceeded: free-models-per-day")).toBe(true);
+        expect(isModelUnavailable("Request timed out.")).toBe(true);
+        expect(isModelUnavailable("Budget exhausted: time limit reached (60 min).")).toBe(false);
+        expect(isModelUnavailable("Blocked: the agent kept re-reading files")).toBe(false);
+        expect(baseTarget("Цель: …\n\nBase: #113")).toBe(113);
+        expect(baseTarget("- **База:** #7")).toBe(7);
+        expect(baseTarget("see base #3 in the text")).toBeNull();
+    });
 
     it("runs commands on the branch of any pull request of the repository, not only bridge tasks", async () => {
         // PR #113 сделал сам планировщик в ветке arena/feature — проверить его через ПК1.

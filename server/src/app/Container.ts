@@ -16,7 +16,7 @@ import {
     FileDeletedEvent,
     FileSavedEvent,
 } from "../core/events/index.js";
-import { GitService } from "../infrastructure/git/GitService.js";
+import { addGitToPath, GitService } from "../infrastructure/git/GitService.js";
 import { BrowserService } from "../infrastructure/browser/BrowserService.js";
 import { createBrowserTools } from "../modules/agent/tools/browserTools.js";
 import { SnapshotService } from "../infrastructure/git/SnapshotService.js";
@@ -273,6 +273,9 @@ export class Container {
         this.gitService =
             new GitService();
 
+        // git только из GitHub Desktop: команды и приложения, которые запускает JustAI, тоже должны его видеть.
+        addGitToPath(this.gitService.binary);
+
         this.browserService =
             new BrowserService(
                 process.env.JUSTAI_BROWSER_CHANNEL
@@ -457,7 +460,7 @@ export class Container {
                     keepAwake: keepAwakeModeFromEnv(process.env.JUSTAI_KEEP_AWAKE),
                     label: githubLabel(),
                     allowedUsers: (process.env.JUSTAI_GITHUB_ALLOWED_USERS ?? "").split(",").map(user => user.trim()).filter(Boolean),
-                    profile: process.env.JUSTAI_GITHUB_PROFILE || "coder",
+                    profile: process.env.JUSTAI_GITHUB_PROFILE || "github",
                     provider: process.env.JUSTAI_GITHUB_PROVIDER || "ollama",
                     ...(process.env.JUSTAI_GITHUB_MODEL ? { model: process.env.JUSTAI_GITHUB_MODEL } : {}),
                     ...(process.env.JUSTAI_GITHUB_EXECUTOR ? { executorProvider: process.env.JUSTAI_GITHUB_EXECUTOR } : {}),

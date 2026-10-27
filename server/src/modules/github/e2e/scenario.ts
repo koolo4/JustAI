@@ -15,6 +15,9 @@ import { z } from "zod";
 
 const selector = z.string().min(1);
 
+/** Шаг только с селектором: «click: '#btn'» или, как пишут планировщики по аналогии с другими шагами, «click: { selector: '#btn' }». */
+const target = z.union([selector, z.object({ selector }).strict().transform(value => value.selector)]);
+
 const textCheck = z.object({
     selector,
     contains: z.string().optional(),
@@ -24,15 +27,15 @@ const textCheck = z.object({
 
 const STEP_SCHEMAS = {
     open: z.string().min(1),
-    click: selector,
+    click: target,
     type: z.object({ selector, text: z.string(), submit: z.boolean().optional() }),
     press: z.string().min(1),
     select: z.object({ selector, value: z.string() }),
     wait: z.number().int().min(0).max(30_000),
     waitFor: z.union([selector, z.object({ selector, timeout: z.number().int().min(100).max(60_000).optional() })]),
     expectText: textCheck,
-    expectVisible: selector,
-    expectHidden: selector,
+    expectVisible: target,
+    expectHidden: target,
     expectClass: z.object({ selector, has: z.string().optional(), any: z.array(z.string()).optional() }),
     expectCount: z.object({ selector, equals: z.number().int().optional(), min: z.number().int().optional(), max: z.number().int().optional() }),
     eval: z.union([z.string().min(1), z.object({ code: z.string().min(1), expect: z.unknown().optional() })]),

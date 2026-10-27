@@ -36,10 +36,8 @@ export function settingFields(): FieldSpec[] {
         }
 
         fields.push({ key: `${preset.prefix}_CONTEXT`, label: "Окно контекста (токены)", group, kind: "number", placeholder: String(preset.contextTokens) });
-
-        if (preset.local) {
-            fields.push({ key: `${preset.prefix}_REASONING_EFFORT`, label: "Размышления (none — выключить)", group, kind: "text" });
-        }
+        // Размышления локальных моделей — только в server/.env: по умолчанию выключены (см. пресет),
+        // а пустое поле в интерфейсе их незаметно включало.
     }
 
     fields.push(
@@ -47,7 +45,7 @@ export function settingFields(): FieldSpec[] {
         { key: "JUSTAI_GITHUB_REPO", label: "Репозиторий (владелец/имя)", group: "GitHub", kind: "text", placeholder: "user/my-project" },
         { key: "JUSTAI_GITHUB_RUNNER", label: "Брать задачи из GitHub на этом ПК (on/off)", group: "GitHub", kind: "text", placeholder: "off" },
         { key: "JUSTAI_GITHUB_PROVIDER", label: "Кто выполняет задачи", group: "GitHub", kind: "provider" },
-        { key: "JUSTAI_GITHUB_PROFILE", label: "Профиль исполнителя (coder или planner)", group: "GitHub", kind: "text", placeholder: "coder" },
+        { key: "JUSTAI_GITHUB_PROFILE", label: "Профиль исполнителя (github — лёгкий набор инструментов, coder — полный, planner)", group: "GitHub", kind: "text", placeholder: "github" },
         { key: "JUSTAI_GITHUB_LABEL", label: "Метка задач", group: "GitHub", kind: "text", placeholder: "justai" },
         { key: "JUSTAI_GITHUB_ALLOWED_USERS", label: "Кто может ставить задачи (логины через запятую; пусто — владелец токена)", group: "GitHub", kind: "text" },
         { key: "JUSTAI_GITHUB_ALLOW_PUBLIC", label: "Разрешить публичный репозиторий (on/off; задачи всё равно только от разрешённых авторов)", group: "GitHub", kind: "text", placeholder: "off" },

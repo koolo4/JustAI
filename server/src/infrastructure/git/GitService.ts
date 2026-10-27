@@ -121,6 +121,24 @@ function findGit(env: NodeJS.ProcessEnv): string | null {
     return null;
 }
 
+/**
+ * Если git найден не в PATH (например, только git из GitHub Desktop), его папка добавляется в PATH окружения:
+ * команды агента, приложения и сценарии, запущенные JustAI, тоже видят git — иначе приложение
+ * в проверке пишет «проект не под git», хотя папка — репозиторий. Возвращает добавленную папку или null.
+ */
+export function addGitToPath(binary: string | null, env: NodeJS.ProcessEnv = process.env): string | null {
+    if (!binary || binary === "git" || !path.isAbsolute(binary)) return null;
+
+    const key = Object.keys(env).find(name => name.toLowerCase() === "path") ?? "PATH";
+    const dir = path.dirname(binary);
+    const parts = (env[key] ?? "").split(path.delimiter).filter(Boolean);
+
+    if (parts.some(part => path.resolve(part).toLowerCase() === dir.toLowerCase())) return null;
+
+    env[key] = [dir, ...parts].join(path.delimiter);
+    return dir;
+}
+
 /** GitHub Desktop кладёт свой git в %LOCALAPPDATA%\GitHubDesktop\app-<версия>\resources\app\git. */
 function gitHubDesktopGits(localAppData: string): string[] {
     const root = path.join(localAppData, "GitHubDesktop");

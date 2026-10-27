@@ -143,6 +143,69 @@ describe("AgentLoop", () => {
         expect(events.filter(event => event.type === "tool.started").map(event => (event as { name: string }).name)).toEqual(["echo", "echo"]);
     });
 
+    it("does not re-read an unchanged file whose content is still visible, and stops a run that keeps re-reading", async () => {
+        let reads = 0;
+        const reader = defineTool({ name: "read_file", description: "r", inputSchema: z.object({ path: z.string(), offset: z.number().optional() }), kind: "read", run: async ({ path }) => { reads += 1; return `content of ${path}`; } });
+        const writer = defineTool({ name: "write_file", description: "w", inputSchema: z.object({ path: z.string() }), kind: "write", run: async () => "ok" });
+
+        // Чтение → повтор (не выполняется) → другой фрагмент (можно) → правка → снова чтение (можно: файл изменился).
+        const ok = setup([
+            { toolCalls: [{ name: "read_file", input: { path: "a.yml" } }] },
+            { toolCalls: [{ name: "read_file", input: { path: "./a.yml" } }] },
+            { toolCalls: [{ name: "read_file", input: { path: "a.yml", offset: 50 } }] },
+            { toolCalls: [{ name: "write_file", input: { path: "a.yml" } }] },
+            { toolCalls: [{ name: "read_file", input: { path: "a.yml" } }] },
+            { text: "done" },
+        ], { tools: [reader, writer] });
+
+        expect((await ok.loop.run([ok.user])).status).toBe("completed");
+        expect(reads).toBe(3);
+        expect(toolResults(ok.saved[3])[0]).toMatchObject({ isError: true, content: expect.stringContaining("already read a.yml") });
+
+        // Только перечитывает два файла по кругу — остановка с понятной причиной, а не час впустую.
+        reads = 0;
+        const loopy = setup([
+            { toolCalls: [{ name: "read_file", input: { path: "a.yml" } }, { name: "read_file", input: { path: "b.yml" } }] },
+            { toolCalls: [{ name: "read_file", input: { path: "a.yml" } }] },
+            { toolCalls: [{ name: "read_file", input: { path: "b.yml" } }] },
+            { toolCalls: [{ name: "read_file", input: { path: "a.yml" } }] },
+            { text: "never reached" },
+        ], { tools: [reader, writer] });
+
+        const result = await loopy.loop.run([loopy.user]);
+        expect(result).toMatchObject({ status: "failed", reason: expect.stringMatching(/^Blocked: .*re-reading/) });
+        expect(reads).toBe(2);
+    });
+
+    it("calibrates the context estimate with the provider's real token count", async () => {
+        // Оценка (символы / 3) завышена вдвое против настоящего счёта: без поправки история ужималась бы.
+        const reader = defineTool({ name: "read_file", description: "r", inputSchema: z.object({ path: z.string() }), kind: "read", run: async () => "x".repeat(4_500) });
+        const provider = Object.assign(new MockProvider([
+            { toolCalls: [{ name: "read_file", input: { path: "a" } }] },
+            { toolCalls: [{ name: "read_file", input: { path: "b" } }] },
+            { text: "done" },
+        ]), { contextWindow: { tokens: 3_000, reserveForOutput: 100 } });
+        const real = provider.stream.bind(provider);
+        provider.stream = request => {
+            const chars = JSON.stringify(request.messages).length + request.system.length + JSON.stringify(request.tools).length;
+            return (async function* () {
+                for await (const event of real(request)) {
+                    yield event.type === "done" ? { ...event, turn: { ...event.turn, usage: { ...event.turn.usage, inputTokens: Math.ceil(chars / 6) } } } : event;
+                }
+            })();
+        };
+
+        const loop = new AgentLoop({
+            sessionId: "s1", workspaceRoot: process.cwd(), provider, tools: [reader], system: "test system",
+            limits: DEFAULT_BUDGET, signal: new AbortController().signal, emit: () => undefined, onMessage: async () => undefined,
+        });
+
+        expect((await loop.run([createMessage("user", [{ type: "text", text: "go" }])])).status).toBe("completed");
+        // Третий запрос: оба прочитанных файла на месте (2×1500 оценочных токенов: без поправки бюджет ~2560, с ней ~5100).
+        const third = JSON.stringify(provider.requests[2]!.messages);
+        expect(third).not.toContain("removed to fit the context window");
+    });
+
     it("recognises requests to build something", () => {
         expect(asksToBuild("мне нужен сайт по дота 2 где нужно угадывать героев - придумай несколько режимов")).toBe(true);
         expect(asksToBuild("создай файл tmp/a.txt")).toBe(true);

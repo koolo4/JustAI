@@ -26,6 +26,16 @@ describe("e2e scenarios", () => {
         expect(() => parseScenario("steps:\n  - window: { command: app.exe }")).toThrow(/title/);
     });
 
+    it("accepts «click: { selector }» like the other steps (planners write it so)", () => {
+        expect(parseScenario("steps:\n  - click: { selector: '#a' }\n  - expectVisible: { selector: '#b' }\n  - expectHidden: '#c'").steps).toEqual([
+            { kind: "click", value: "#a" },
+            { kind: "expectVisible", value: "#b" },
+            { kind: "expectHidden", value: "#c" },
+        ]);
+        // Лишние поля — ошибка, а не молча проигнорированный параметр.
+        expect(() => parseScenario("steps:\n  - click: { selector: '#a', timeout: 5 }")).toThrow(/Step 1 \(click\)/);
+    });
+
     it("accepts JSON too", () => {
         expect(parseScenario('{"steps":[{"press":"Escape"},{"wait":200}]}').steps).toEqual([
             { kind: "press", value: "Escape" },

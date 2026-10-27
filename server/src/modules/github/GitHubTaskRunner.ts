@@ -83,6 +83,10 @@ interface TaskState {
     kind?: "code" | "test";
     /** Итог проверок проекта (typecheck, тесты…), которые мост запускает сам после работы агента. */
     checks?: VerificationOutcome["status"];
+    /** Ветка, от которой сделана ветка задачи и в которую открыт PR («Base: #N»); нет — основная. */
+    base?: string;
+    /** Модель была недоступна: задача продолжится сама, когда модель ответит (одно сообщение в issue, а не на каждый повтор). */
+    waitingModel?: boolean;
 }
 
 interface StoredState {
@@ -116,6 +120,56 @@ const CONTINUE_NOTE = "Continue the task from where you stopped and finish it.";
 
 const RESUME_NOTE = "The previous run of this task was interrupted (JustAI was restarted). Check the current state of the files and continue from where you stopped until the task, including any requested changes above, is complete.";
 
+const MODEL_BACK_NOTE = "The model was unavailable for a while and your previous run was cut off. Your work so far is committed in this branch. Continue the task from where you stopped and finish it.";
+
+/** Через сколько снова пробовать модель, которая не ответила. */
+const MODEL_RETRY_MS = 5 * 60_000;
+
+/**
+ * Ошибка доступа к модели, а не к задаче: сервер не запущен, завис, перегружен или упёрся в лимит запросов.
+ * С такой ошибкой задача не проваливается, а ждёт модель.
+ */
+export function isModelUnavailable(error: string): boolean {
+    return /fetch failed|ECONNREFUSED|ECONNRESET|socket hang up|connection error|timed? ?out|\b(429|502|503|504)\b|rate limit|overloaded|model is loading/i.test(error);
+}
+
+/** «Base: #12» (или «База: #12») — ветка, поверх которой делать задачу; null — основная. */
+export function baseTarget(body: string, label = "justai"): number | null {
+    void label;
+    const match = /^[ \t]*[-*]?[ \t]*\**(?:base|база|ветка от)\**[ \t]*:?[ \t]*\**[ \t]*#(\d+)[ \t]*$/im.exec(body);
+    return match ? Number(match[1]) : null;
+}
+
+/** Последняя строка `git diff --stat`: «2 files changed, 3 insertions(+), 1 deletion(-)». */
+function statSummary(stat: string): string {
+    return stat.split("\n").at(-1)!.trim();
+}
+
+function capitalize(text: string): string {
+    return text ? text[0]!.toUpperCase() + text.slice(1) : text;
+}
+
+/** Последний неудачный вызов инструмента в логе — дословно, чтобы причина сбоя в отчёте совпадала с логом. */
+function lastToolError(messages: Message[]): string {
+    const names = new Map<string, string>();
+
+    for (const message of messages) {
+        for (const block of message.content) {
+            if (block.type === "tool_use") names.set(block.id, `${block.name} ${briefInput(block.input)}`.trim());
+        }
+    }
+
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+        for (const block of [...messages[i]!.content].reverse()) {
+            if (block.type === "tool_result" && block.isError) {
+                return `\`${names.get(block.toolUseId) ?? "?"}\` — ${clip(resultText(block).replace(/\s+/g, " ").trim(), 300)}`;
+            }
+        }
+    }
+
+    return "";
+}
+
 function summarize(state: StoredState): GitHubRunnerStatus["tasks"] {
     return Object.entries(state.tasks).map(([issue, task]) => ({
         issue: Number(issue),
@@ -145,6 +199,9 @@ export class GitHubTaskRunner {
     private readonly apps?: AppManager;
 
     private lastTickAt = 0;
+
+    /** До какого времени не начинать работу агента: модель только что не ответила. */
+    private modelDownUntil = 0;
 
     /** Событие в ленту моста. */
     private note(event: Omit<BridgeEvent, "id" | "time">): void {
@@ -255,6 +312,8 @@ export class GitHubTaskRunner {
             })
             .finally(() => {
                 this.running = undefined;
+                // Пока шла задача, опросов не было по занятости, а не из-за сна: пропуск считается от конца прохода.
+                this.lastTickAt = Date.now();
             });
 
         return this.running;
@@ -358,8 +417,15 @@ export class GitHubTaskRunner {
             return;
         }
 
-        // «В работе» в файле, но не в этом процессе: задачу оборвал перезапуск JustAI. Если её уже просили остановить —
-        // ставим на паузу и отвечаем; иначе продолжаем (в той же сессии, а если сессию не успели записать — в новой).
+        // Модель недавно не отвечала: команды без модели (стоп, close, run, merge, e2e) работают, работа агента ждёт.
+        const modelReady = this.modelDownUntil <= Date.now();
+
+        if (!modelReady) {
+            this.status = { ...this.status, warning: `Модель не отвечает — задачи продолжатся после ${clock(this.modelDownUntil)}.` };
+        }
+
+        // «В работе» в файле, но не в этом процессе: задачу оборвал перезапуск JustAI (или ждёт модель). Если её уже
+        // просили остановить — ставим на паузу и отвечаем; иначе продолжаем (в той же сессии, а если сессию не успели записать — в новой).
         for (const issue of open) {
             const task = state.tasks[issue.number];
 
@@ -371,12 +437,14 @@ export class GitHubTaskRunner {
             const stopComment = comments.find(item => item.id > task.lastCommentId && allowed.has(item.author.toLowerCase()) && isStopCommand(item.body, config.label));
 
             if (stopIssue || stopComment) {
+                const why = task.waitingModel ? "ждала, пока ответит модель," : "была прервана перезапуском JustAI и";
                 task.status = "paused";
+                delete task.waitingModel;
                 task.lastCommentId = Math.max(task.lastCommentId, stopComment?.id ?? 0);
                 if (stopIssue) state.followUps = [...state.followUps ?? [], stopIssue.number];
                 await this.save(state);
-                this.note({ kind: "paused", issue: issue.number, text: "Задачу оборвал перезапуск JustAI; по команде остановки она поставлена на паузу." });
-                await this.soft(client.comment(issue.number, "⏸ **JustAI**: задача была прервана перезапуском JustAI и по команде остановки поставлена на паузу. Продолжить — комментарий с указаниями или issue «/justai continue #" + issue.number + "»."), "comments");
+                this.note({ kind: "paused", issue: issue.number, text: `Задача ${why} по команде остановки поставлена на паузу.` });
+                await this.soft(client.comment(issue.number, `⏸ **JustAI**: задача ${why} по команде остановки поставлена на паузу. Продолжить — комментарий с указаниями или issue «/justai continue #${issue.number}».`), "comments");
                 await this.soft(client.addLabels(issue.number, [LABELS.paused]), "labels");
                 await this.soft(client.removeLabel(issue.number, LABELS.working), "labels");
 
@@ -388,7 +456,9 @@ export class GitHubTaskRunner {
                 return;
             }
 
-            await this.run(issue, state, [{ id: 0, author: "JustAI", body: RESUME_NOTE, createdAt: "" }]);
+            if (!modelReady) continue;
+
+            await this.run(issue, state, [{ id: 0, author: "JustAI", body: task.waitingModel ? MODEL_BACK_NOTE : RESUME_NOTE, createdAt: "" }]);
             return;
         }
 
@@ -402,6 +472,9 @@ export class GitHubTaskRunner {
             }
 
             const action = followUpCommand(issue, config.label)?.action;
+
+            // Правка ждёт модель: issue не принимается, пока её некому выполнить.
+            if (!modelReady && action !== "merge" && action !== "stop") continue;
 
             // «/justai merge #N»: слить PR задачи (проверки запускаются заново).
             if (action === "merge") {
@@ -515,6 +588,8 @@ export class GitHubTaskRunner {
                     await this.soft(client.addLabels(issue.number, [config.label]), "labels");
                 }
 
+                if (!modelReady) continue;
+
                 await this.run(issue, state, []);
                 return;
             }
@@ -555,7 +630,7 @@ export class GitHubTaskRunner {
             const feedback = fresh.filter(item => !isStopCommand(item.body, config.label) && !runCommentCommand(item.body, config.label)
                 && !isMergeCommand(item.body, config.label) && !appCommand(item.body, config.label) && !e2eCommand(item.body, config.label));
 
-            if (feedback.length > 0) {
+            if (feedback.length > 0 && modelReady) {
                 await this.run(issue, state, feedback, comments);
                 return;
             }
@@ -568,9 +643,31 @@ export class GitHubTaskRunner {
         const { client, sessions, permissions, config } = this.deps;
 
         const previous = state.tasks[issue.number];
-        const base = await client.defaultBranch();
+        const defaultBase = await client.defaultBranch();
         const kind = previous?.kind ?? (isTestTask(issue, config.label) ? "test" : "code");
         const testOf = kind === "test" ? testTarget(issue, config.label) : null;
+        // «Base: #N» в новой задаче: работать поверх ветки другого PR (правки к нему), а не основной.
+        let base = previous?.base ?? defaultBase;
+
+        if (!previous && kind === "code") {
+            const from = baseTarget(issue.body, config.label);
+
+            if (from !== null) {
+                const resolved = await this.resolveTarget(from, state);
+
+                if ("error" in resolved) {
+                    state.tasks[issue.number] = { sessionId: "", branch: `justai/issue-${issue.number}`, status: "failed", lastCommentId: 0, kind };
+                    await this.save(state);
+                    this.note({ kind: "failed", issue: issue.number, title: cleanTitle(issue.title, config.label), url: issue.url, text: `Base: ${resolved.error}` });
+                    await this.soft(client.comment(issue.number, `⚠️ **JustAI**: строка «Base: #${from}» — ${resolved.error}. Исправьте её в описании и напишите \`/${config.label} continue\` (или создайте задачу заново).`), "comments");
+                    await this.soft(client.addLabels(issue.number, [LABELS.failed]), "labels");
+                    return;
+                }
+
+                base = resolved.branch ?? defaultBase;
+            }
+        }
+
         // Проверка смотрит ветку указанной задачи («/justai test #N») или основную.
         const branch = previous?.branch
             ?? (kind === "test" ? (testOf !== null ? state.tasks[testOf]?.branch : undefined) ?? base : `justai/issue-${issue.number}`);
@@ -607,6 +704,7 @@ export class GitHubTaskRunner {
             lastCommentId: Math.max(0, ...comments.map(item => item.id)),
             kind,
             ...(previous?.pullRequest ? { pullRequest: previous.pullRequest } : {}),
+            ...(base !== defaultBase && kind === "code" ? { base } : {}),
         };
 
         state.tasks[issue.number] = task;
@@ -626,6 +724,8 @@ export class GitHubTaskRunner {
                 await this.checkoutBranch(branch, base, Boolean(previous));
             }
 
+            // С чего начался этот запуск: в отчёте «в этом запуске» отдельно от того, что уже было в ветке.
+            const startHead = (await this.git(["rev-parse", "HEAD"]).catch(() => "")).trim();
             const freshSession = !task.sessionId || !(await sessions.get(task.sessionId).then(() => true, () => false));
 
             if (freshSession) {
@@ -674,8 +774,12 @@ export class GitHubTaskRunner {
                 return;
             }
 
+            const lastError = details.session.lastError ?? "";
+            // Модель не ответила (сервер Ollama завис, не запущен, перегружен): задача не провалена — она подождёт.
+            const modelDown = !watch.stopped && details.session.status !== "completed" && isModelUnavailable(lastError);
+
             // Коммиты мог сделать и агент (например, слияние основной ветки для разрешения конфликта) — их тоже отправляем.
-            const committed = await this.commit(issue, watch.stopped ? "WIP: " : "") || await this.isAhead(branch);
+            const committed = await this.commit(issue, watch.stopped || modelDown ? "WIP: " : "") || await this.isAhead(branch);
 
             if (committed) {
                 await this.push(branch);
@@ -684,22 +788,58 @@ export class GitHubTaskRunner {
                 task.pullRequest = pull.url;
             }
 
-            if (watch.stopped) {
+            // Что изменилось именно в этом запуске и что всего в ветке — по git, а не со слов агента.
+            const runStat = startHead ? (await this.git(["diff", "--stat", startHead, "HEAD"]).catch(() => "")).trim() : "";
+            const stat = (await this.git(["diff", "--stat", `refs/remotes/origin/${base}...HEAD`]).catch(() => "")).trim();
+            const thisRun = runStat ? `в этом запуске изменено: ${statSummary(runStat)}` : "в этом запуске файлы не менялись";
+            const inBranch = stat ? `всего в ветке: ${statSummary(stat)}` : "";
+            const where = task.pullRequest ? ` · PR: ${task.pullRequest}` : "";
+
+            if (modelDown) {
+                const first = !task.waitingModel;
+                task.waitingModel = true;
+                this.modelDownUntil = Date.now() + MODEL_RETRY_MS;
+                await watch.update("⏳ **JustAI**: модель не отвечает — задача продолжится сама.");
+                this.note({ kind: "note", issue: issue.number, title, text: `Модель не отвечает (${clip(lastError, 160)}). Задача продолжится сама после ${clock(this.modelDownUntil)}; сделанное сохранено.` });
+
+                if (first) {
+                    await this.soft(client.comment(issue.number, [
+                        `⏳ **JustAI**: модель не отвечает (\`${clip(lastError, 300)}\`). Задача не провалена: она продолжится сама, когда модель снова ответит (проверка раз в ${MODEL_RETRY_MS / 60_000} мин).`,
+                        `Сделанное: ${thisRun}${inBranch ? `; ${inBranch}` : ""}${where}.`,
+                        `_Остановить: \`/${config.label} stop\`._`,
+                    ].join("\n")), "comments");
+                }
+
+                return;
+            }
+
+            delete task.waitingModel;
+
+            // Агент только перечитывал файлы и ничего не менял — ждать час бесполезно, нужно решение планировщика.
+            const blocked = !watch.stopped && lastError.startsWith("Blocked:");
+
+            if (watch.stopped || blocked) {
                 task.status = "paused";
                 task.lastCommentId = Math.max(task.lastCommentId, watch.stopCommentId);
 
-                await watch.update("⏸ **JustAI** остановлен по команде.");
+                await watch.update(blocked ? "🚧 **JustAI**: задача заблокирована — требуется решение." : "⏸ **JustAI** остановлен по команде.");
                 await this.soft(client.comment(issue.number, [
-                    "⏸ **JustAI** stopped on request.",
-                    committed ? `Work so far is saved in \`${branch}\`${task.pullRequest ? ` · pull request: ${task.pullRequest}` : ""}.` : "No file changes yet.",
+                    blocked
+                        ? "🚧 **JustAI**: задача заблокирована, требуется решение. Агент повторно читал уже прочитанные файлы и ничего не менял, поэтому остановлен."
+                        : "⏸ **JustAI** остановлен по команде.",
+                    `Факты по git: ${thisRun}${inBranch ? `; ${inBranch}` : ""}${where}.`,
+                    ...(blocked ? ["", lastToolError(messages) ? `Последняя ошибка инструмента (из лога): ${lastToolError(messages)}` : ""] : []),
                     "",
-                    "**Where it stopped:**",
+                    "**Где остановился** (со слов агента — это не итог):",
                     clip(report, REPORT_CHARS),
                     "",
-                    "_To continue, reply in this issue with instructions (or create an issue with `/justai continue #" + issue.number + "`). JustAI resumes in the same session._",
+                    blocked
+                        ? `_Дальше: ответьте точными заменами («в файле X строку A заменить на B» или полный текст файла) — JustAI продолжит в той же сессии; или разбейте задачу на меньшие._`
+                        : `_Продолжить: ответьте в этом issue указаниями (или issue \`/${config.label} continue #${issue.number}\`) — JustAI продолжит в той же сессии._`,
                 ].join("\n")), "comments");
                 await this.soft(client.addLabels(issue.number, [LABELS.paused]), "labels");
-                this.note({ kind: "paused", issue: issue.number, title, sessionId: task.sessionId, ...(task.pullRequest ? { url: task.pullRequest } : {}), text: `Остановлено по команде. ${committed ? "Сделанное сохранено в ветке." : "Изменений не было."}` });
+                this.note({ kind: "paused", issue: issue.number, title, sessionId: task.sessionId, ...(task.pullRequest ? { url: task.pullRequest } : {}),
+                    text: `${blocked ? "Заблокирована: перечитывал файлы без правок — нужно решение." : "Остановлено по команде."} ${capitalize(thisRun)}${inBranch ? `; ${inBranch}` : ""}.` });
                 return;
             }
 
@@ -711,21 +851,22 @@ export class GitHubTaskRunner {
             const checks = ok ? await this.runChecks() : null;
             if (checks) task.checks = checks.status;
             const screenshots = await this.uploadScreenshots(issue.number, messages);
-            // Что на самом деле изменилось в ветке — по git, чтобы отчёт агента можно было сверить.
-            const stat = (await this.git(["diff", "--stat", `refs/remotes/origin/${base}...HEAD`]).catch(() => "")).trim();
+            const toolError = ok ? "" : lastToolError(messages);
 
             await this.soft(client.comment(issue.number, [
-                ok ? "✅ **JustAI** finished this step." : "⚠️ **JustAI** could not complete this step.",
-                committed ? `Branch \`${branch}\`${task.pullRequest ? ` · pull request: ${task.pullRequest}` : ""}` : "No file changes were made.",
-                details.session.lastError ? `Error: ${details.session.lastError}` : "",
+                ok ? "✅ **JustAI** закончил этот шаг." : "⚠️ **JustAI** не смог закончить этот шаг.",
+                `Ветка \`${branch}\`${base !== defaultBase ? ` (от \`${base}\`)` : ""}${where}`,
+                `**Факты по git:** ${thisRun}${inBranch ? `; ${inBranch}` : ""}.`,
+                lastError ? `**Почему остановился** (из лога): ${lastError}` : "",
+                toolError ? `**Последняя ошибка инструмента** (из лога): ${toolError}` : "",
                 ...(checks ? ["", checksReport(checks)] : []),
-                ...(stat ? ["", "**Изменения в ветке** (по git, не со слов агента):", fenced(clip(stat, 2_000))] : []),
+                ...(stat ? ["", `**Изменения в ветке** относительно \`${base}\` (по git, не со слов агента):`, fenced(clip(stat, 2_000))] : []),
                 "",
-                "**Report:**",
+                "**Отчёт агента** (с его слов — сверяйте с фактами и проверками выше):",
                 clip(report, REPORT_CHARS),
                 ...screenshots,
                 "",
-                `_Reply in this issue to request changes — JustAI will continue on the same branch. Run a command on this branch: \`/${config.label} run <command>\`. Merge when it is good: \`/${config.label} merge\`._`,
+                `_Правки — ответом в этом issue, JustAI продолжит в той же ветке. Команда в ветке: \`/${config.label} run <команда>\`. Слить, когда всё хорошо: \`/${config.label} merge\`._`,
             ].join("\n")), "comments");
 
             await this.soft(client.addLabels(issue.number, [ok ? LABELS.review : LABELS.failed]), "labels");
@@ -736,9 +877,10 @@ export class GitHubTaskRunner {
                 sessionId: task.sessionId,
                 ...(task.pullRequest ? { url: task.pullRequest } : {}),
                 text: [
-                    ok ? `Готово${task.pullRequest ? ` → PR ${task.pullRequest.split("/").pop()}` : ""}` : `Не удалось${details.session.lastError ? `: ${details.session.lastError}` : ""}`,
+                    ok ? `Готово${task.pullRequest ? ` → PR ${task.pullRequest.split("/").pop()}` : ""}` : `Не удалось${lastError ? `: ${lastError}` : ""}`,
                     checks ? `проверки ${checks.status === "passed" ? "✓" : checks.status === "failed" ? "✕" : "—"}` : "",
-                    stat ? `изменено: ${stat.split("\n").at(-1)!.trim()}` : "файлы не менялись",
+                    thisRun,
+                    inBranch,
                 ].filter(Boolean).join(" · "),
             });
         }
@@ -757,7 +899,7 @@ export class GitHubTaskRunner {
             if (kind === "test") await this.discardChanges().catch(() => undefined);
             // Упавшая задача не должна оставлять файлы в папке: иначе следующие задачи упираются в «грязную» папку.
             if (kind === "code" && task.status === "failed") await this.saveFailedWork(issue, branch);
-            await this.git(["checkout", base]).catch(() => undefined);
+            await this.git(["checkout", defaultBase]).catch(() => undefined);
             await this.save(state);
             release();
             this.status = { ...this.status, currentIssue: undefined, currentSessionId: undefined,
@@ -1040,6 +1182,56 @@ export class GitHubTaskRunner {
     }
 
     /** Ветка задачи, если она ещё есть на GitHub, иначе основная (задачу слили — ветку удалили). */
+    /** Разбор сценариев tests/e2e ветки (и блока из issue) без запуска: какие файлы годны и что исправить в остальных. */
+    private async checkScenarios(branch: string | undefined, block: string | null): Promise<string> {
+        const { branch: target, note } = await this.liveBranch(branch);
+        await this.git(["fetch", "origin"], true).catch(() => undefined);
+
+        const ref = `refs/remotes/origin/${target}`;
+        const names = (await this.git(["ls-tree", "--name-only", `${ref}:${E2E_DIR}`]).catch(() => ""))
+            .split("\n").map(line => line.trim()).filter(name => /\.(ya?ml|json)$/i.test(name)).sort();
+        const rows: string[] = [];
+        let bad = 0;
+
+        const check = (label: string, source: string) => {
+            try {
+                const scenario = parseScenario(source);
+                rows.push(`| ✓ | \`${label}\` | ${scenario.steps.length} шаг(ов) |`);
+            }
+            catch (error) {
+                bad += 1;
+                rows.push(`| ✕ | \`${label}\` | ${(error instanceof ScenarioError ? error.message : message(error)).replace(/\|/g, "\\|")} |`);
+            }
+        };
+
+        if (block) check("сценарий из issue", block);
+
+        for (const name of names) {
+            const source = await this.git(["show", `${ref}:${E2E_DIR}/${name}`]).catch(() => null);
+
+            if (source === null) {
+                bad += 1;
+                rows.push(`| ✕ | \`${E2E_DIR}/${name}\` | файл не прочитан из ветки |`);
+                continue;
+            }
+
+            check(`${E2E_DIR}/${name}`, source);
+        }
+
+        if (!rows.length) return `ℹ️ **JustAI e2e check** (ветка \`${target}\`): сценариев нет — ни блока в issue, ни файлов в \`${E2E_DIR}/\`.${note ? `\n${note}` : ""}`;
+
+        return [
+            `${bad ? "❌" : "✅"} **JustAI e2e check** (ветка \`${target}\`, без запуска): ${rows.length - bad} из ${rows.length} сценариев разобраны.`,
+            ...(note ? [note] : []),
+            "",
+            "| | Сценарий | Итог |",
+            "|---|---|---|",
+            ...rows,
+            "",
+            "_Проверяется только формат шагов. Селекторы и поведение — прогоном `/" + this.deps.config.label + " e2e #N all`._",
+        ].join("\n");
+    }
+
     private async liveBranch(branch: string | undefined): Promise<{ branch: string; note: string }> {
         const base = await this.deps.client.defaultBranch();
 
@@ -1106,6 +1298,12 @@ export class GitHubTaskRunner {
     private async runE2E(postTo: number, branch: string | undefined, body: string, files: string | undefined): Promise<boolean> {
         const { client, config } = this.deps;
         const say = (text: string) => this.soft(client.comment(postTo, text), "comments");
+
+        // «/justai e2e #N check» — только разбор сценариев (без приложения и браузера): ошибки формата видны сразу.
+        if (files === "check") {
+            await say(await this.checkScenarios(branch, scenarioBlock(body)));
+            return true;
+        }
 
         if (!this.apps || !this.deps.e2eBrowser) {
             await say("⚠️ **JustAI**: на этом ПК сценарные проверки не поддерживаются (нет браузера или процессов).");
@@ -1871,10 +2069,15 @@ export function taskPrompt(issue: GitHubIssue, branch: string, label = "justai")
         issue.body.trim() || "(no description)",
         "",
         "---",
-        `This is GitHub task #${issue.number}. You are working in a git repository on branch ${branch}. Implement this task completely in the files, run the project's checks or tests if there are any, and fix what fails.`,
+        `This is GitHub task #${issue.number}. You are working in a git repository on branch ${branch}. Implement this task completely in the files.`,
+        "Work in this order and do not go back to an earlier step without a reason:",
+        "1. Read the files the task names — each file once (a file you already read has not changed unless you changed it).",
+        "2. Make the changes with edit_file or write_file.",
+        "3. Run the check the task names (or the project's tests), and fix what fails.",
+        "4. Finish with a short report: what you changed (files), the commands you ran and their results, and anything left to do.",
         "If the task gives the complete content of a file, write it exactly with write_file (do not patch it with edit_file) and change nothing in that content.",
+        "If you cannot make a change, stop and say exactly why — do not keep reading the same files.",
         "Do not commit or push: JustAI commits your changes and opens a pull request after you finish.",
-        "Finish with a short report: what you changed (files), how you verified it, and anything left to do.",
     ].join("\n");
 }
 
@@ -1994,7 +2197,8 @@ export function feedbackPrompt(issue: GitHubIssue, feedback: GitHubComment[], br
         "",
         "---",
         `These are new comments from ${[...new Set(feedback.map(item => item.author))].join(", ")} on GitHub task #${issue.number} (${issue.title}).`,
-        `Address them on branch ${branch}. If they give the complete content of a file, write it exactly with write_file instead of patching it. Do not commit or push. Finish with a short report of what you changed.`,
+        `Address them on branch ${branch}: make the changes first (read a file only if you have not read it yet or it changed), then run the check they name.`,
+        "If they give the complete content of a file, write it exactly with write_file instead of patching it. Do not commit or push. Finish with a short report of what you changed.",
     ].join("\n");
 }
 

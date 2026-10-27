@@ -9,7 +9,8 @@ const IMAGE_TOKENS = 1_500;
 /** Последние сообщения не сжимаются: в них текущая работа. */
 const KEEP_RECENT = 6;
 
-const CLEARED_OUTPUT = "[Earlier output of this tool was removed to fit the context window. Call the tool again if you need it.]";
+export const CLEARED_TOOL_OUTPUT = "[Earlier output of this tool was removed to fit the context window. Call the tool again if you need it.]";
+const CLEARED_OUTPUT = CLEARED_TOOL_OUTPUT;
 
 export interface ContextWindowOptions {
     /** Размер окна модели в токенах. */
@@ -18,6 +19,11 @@ export interface ContextWindowOptions {
     reserveForOutput: number;
     system: string;
     tools: ToolSpec[];
+    /**
+     * Поправка оценки по фактическому счёту провайдера: настоящие токены / оценка (1 — без поправки).
+     * Оценка по символам грубая; без поправки на маленьком окне история сжималась после каждого шага.
+     */
+    scale?: number;
 }
 
 export interface CompactionResult {
@@ -66,8 +72,10 @@ export function messageTokens(message: Message): number {
  */
 /** Сколько токенов истории помещается в окно после системного промпта, инструментов и резерва под ответ. */
 export function contextBudget(options: ContextWindowOptions): number {
-    const overhead = estimateTokens(options.system) + estimateTokens(JSON.stringify(options.tools));
-    return Math.floor((options.window - options.reserveForOutput - overhead) * 0.9);
+    const scale = options.scale ?? 1;
+    const overhead = (estimateTokens(options.system) + estimateTokens(JSON.stringify(options.tools))) * scale;
+    // Бюджет — в единицах оценки (символы / 3): сообщения дальше считаются той же оценкой.
+    return Math.floor((options.window - options.reserveForOutput - overhead) * 0.9 / scale);
 }
 
 export function fitToContextWindow(messages: Message[], options: ContextWindowOptions): CompactionResult {
