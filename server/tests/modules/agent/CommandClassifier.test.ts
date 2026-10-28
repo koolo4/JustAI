@@ -58,6 +58,10 @@ const cases: Array<[string, CommandLevel]> = [
 
     // опасные — в том числе внутри вложенных оболочек и цепочек
     ["rm -rf node_modules", "dangerous"],
+    ["git rm -r node_modules", "dangerous"],
+    ["git rm -rf src", "dangerous"],
+    // Только индекс: файлы остаются на диске — так убирают node_modules из PR.
+    ["git rm -r --cached node_modules", "unknown"],
     ["rm -fr /", "dangerous"],
     ["Remove-Item -Recurse -Force dist", "dangerous"],
     ["Remove-Item build -Recurse", "dangerous"],

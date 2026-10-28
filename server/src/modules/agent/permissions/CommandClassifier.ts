@@ -25,7 +25,9 @@ export interface CommandRules {
 }
 
 const DANGEROUS: Array<{ pattern: RegExp; reason: string }> = [
-    { pattern: /\brm\s+(-[a-z]*[rf][a-z]*\s+)+/i, reason: "recursive or forced delete (rm -r/-f)" },
+    // «git rm -r --cached node_modules» только убирает файлы из индекса (так чистят PR от зависимостей) — не удаление.
+    { pattern: /(?<!\bgit\s+)\brm\s+(-[a-z]*[rf][a-z]*\s+)+/i, reason: "recursive or forced delete (rm -r/-f)" },
+    { pattern: /\bgit\s+rm\b(?![^;|&]*--cached)/i, reason: "deletes tracked files (git rm without --cached)" },
     { pattern: /\bremove-item\b[^|;]*-(recurse|r\b|force)/i, reason: "recursive or forced delete (Remove-Item)" },
     { pattern: /\b(rd|rmdir)\s+\/s\b/i, reason: "recursive delete (rd /s)" },
     { pattern: /\bdel\s+(\/[a-z]\s+)*\/[sq]\b/i, reason: "recursive delete (del /s)" },

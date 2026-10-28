@@ -25,7 +25,7 @@ import { ProcessManager } from "../../../src/infrastructure/process/ProcessManag
 import { BrowserService } from "../../../src/infrastructure/browser/BrowserService.js";
 import { Verifier } from "../../../src/modules/agent/runtime/Verifier.js";
 import {
-    appCommand, ARTIFACTS_BRANCH, baseTarget, checksReport, isModelUnavailable, closeCommand, dependsOn, e2eCommand, testEvidence, followUpCommand, followUpTarget, GitHubTaskRunner, isMergeCommand, isStopCommand, isTask, isTestTask, LABELS, originMatches,
+    appCommand, ARTIFACTS_BRANCH, baseTarget, checksReport, isDependencyPath, isModelUnavailable, isTempFile, mentionedFiles, restrictsFiles, closeCommand, dependsOn, e2eCommand, testEvidence, followUpCommand, followUpTarget, GitHubTaskRunner, isMergeCommand, isStopCommand, isTask, isTestTask, LABELS, originMatches,
     progressReport, runCommentCommand, runIssueCommand, statusReport, stripCommands, taskPrompt, testTarget, testVerdict,
 } from "../../../src/modules/github/GitHubTaskRunner.js";
 
@@ -374,7 +374,8 @@ describe.skipIf(!git.available)("GitHubTaskRunner", () => {
         expect(sessionList).toHaveLength(1);
         const prompts = (await slowSessions.get(sessionList[0]!.id)).messages
             .filter(item => item.role === "user" && item.content.some(block => block.type === "text"));
-        expect(prompts.map(item => (item.content[0] as { text: string }).text.split("\n")[0])).toEqual(["прочитай slow.txt", "прочитай other.txt"]);
+        // Подсказки JustAI (проверка изменений: «ни один файл не изменён») — не запросы пользователя.
+        expect(prompts.map(item => (item.content[0] as { text: string }).text.split("\n")[0]).filter(text => !text?.startsWith("[JustAI]"))).toEqual(["прочитай slow.txt", "прочитай other.txt"]);
     }, 60_000);
 
     it("runs a test task without changing files: project checks and screenshots in the report, no PASS without a verdict", async () => {
@@ -579,7 +580,9 @@ describe.skipIf(!git.available)("GitHubTaskRunner", () => {
         github.comments.get(90)!.push({ id: 700, author: "me", body: "/justai merge", createdAt: "" });
         await strict.check();
         expect(github.merged).toEqual([]);
-        expect(github.comments.get(90)!.at(-1)!.body).toContain("не слито — проверки не прошли");
+        // Красные проверки — задача не «готов PR», слить её нельзя.
+        expect(strict.getStatus().tasks.find(task => task.issue === 90)).toMatchObject({ status: "failed", checks: "failed" });
+        expect(github.comments.get(90)!.at(-1)!.body).toContain("слить нельзя");
         expect(run(root, "rev-parse", "--abbrev-ref", "HEAD").trim()).toBe("main");
 
         const off = new GitHubTaskRunner({
@@ -826,6 +829,93 @@ describe.skipIf(!git.available)("GitHubTaskRunner", () => {
         expect(github.comments.get(180)!.some(item => item.body.includes("влита ветка `arena/feature`"))).toBe(true);
     }, 90_000);
 
+    /** Агент по сценарию: первый ход — вызовы инструментов, дальше (после результатов и подсказок JustAI) — текст. */
+    async function scriptedAgent(steps: Array<Array<{ name: string; input: unknown }>>, finalText = "Готово.") {
+        const { MockProvider } = await import("../../../src/modules/agent/providers/MockProvider.js");
+        const real = MockProvider.prototype.stream;
+        let turn = 0;
+        MockProvider.prototype.stream = function (request) {
+            const calls = steps[turn];
+            turn += 1;
+            return real.call(new MockProvider([calls ? { toolCalls: calls } : { text: finalText }]), request);
+        } as typeof real;
+        return () => { MockProvider.prototype.stream = real; };
+    }
+
+    it("keeps dependencies and temporary files out of the pull request", async () => {
+        const restore = await scriptedAgent([[
+            { name: "write_file", input: { path: "a.txt", content: "a\n" } },
+            { name: "write_file", input: { path: "node_modules/pkg/index.js", content: "x\n" } },
+            { name: "write_file", input: { path: "README_original.tmp", content: "old\n" } },
+        ]]);
+
+        try {
+            github.issue(185, "Добавь a.txt");
+            await runner.check();
+        }
+        finally {
+            restore();
+        }
+
+        const files = run(remote, "ls-tree", "-r", "--name-only", "justai/issue-185");
+        expect(files).toContain("a.txt");
+        expect(files).not.toContain("node_modules");
+        expect(files).not.toContain("README_original.tmp");
+        // node_modules даже не попадает в индекс (.git/info/exclude), временный файл — убран из коммита с пометкой.
+        expect(github.comments.get(185)!.at(-1)!.body).toMatch(/Не попало в коммит[\s\S]*README_original\.tmp/);
+        // Временный файл не удалён, а убран в stash.
+        expect(run(root, "stash", "list")).toContain("временные файлы задачи #185");
+        expect(runner.getStatus().tasks.find(task => task.issue === 185)).toMatchObject({ status: "review" });
+    }, 90_000);
+
+    it("does not call a task ready when the diff shows a truncated file or files outside the task", async () => {
+        await writeFile(path.join(root, "README.md"), Array.from({ length: 40 }, (_, i) => `Раздел ${i + 1}`).join("\n") + "\n");
+        run(root, "add", "README.md");
+        run(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "readme");
+        run(root, "push", "origin", "HEAD:main");
+
+        const restore = await scriptedAgent([
+            [{ name: "read_file", input: { path: "README.md" } }],
+            [{ name: "write_file", input: { path: "README.md", content: "Новый короткий текст\n", confirm_shrink: true } }, { name: "write_file", input: { path: "other.js", content: "x\n" } }],
+        ], "Обновил README.");
+
+        try {
+            github.issue(186, "Раздел «Запуск» в README", "me", { body: "Добавь в `README.md` раздел «Запуск». Не меняй другие файлы." });
+            await runner.check();
+        }
+        finally {
+            restore();
+        }
+
+        const report = github.comments.get(186)!.at(-1)!.body;
+        expect(report).toContain("Проверка изменений не пройдена");
+        expect(report).toMatch(/`README\.md` обрезан: было 41 строк, осталось 2/);
+        expect(report).toMatch(/вне задачи: `other\.js`/);
+        expect(runner.getStatus().tasks.find(task => task.issue === 186)).toMatchObject({ status: "failed" });
+
+        // Агенту один раз вернули найденное — до решения о готовности.
+        const session = (await sessions.list()).find(item => item.title.includes("#186"))!;
+        const texts = (await sessions.get(session.id)).messages.flatMap(item => item.content).filter(block => block.type === "text").map(block => (block as { text: string }).text);
+        expect(texts.filter(text => text.startsWith("[JustAI] Перед завершением"))).toHaveLength(1);
+    }, 90_000);
+
+    it("moves a task to a new session when its old session has another profile", async () => {
+        const old = await sessions.create({ profile: "general", provider: "mock", mode: "full-auto" });
+        const fs = await import("node:fs/promises");
+        const stateFile = path.join(root, ".justai", "github-state.json");
+        await fs.mkdir(path.dirname(stateFile), { recursive: true });
+        await fs.writeFile(stateFile, JSON.stringify({ tasks: { "187": { sessionId: old.id, branch: "justai/issue-187", status: "paused", lastCommentId: 0, kind: "code" } } }));
+
+        github.issue(187, "создай файл p.txt");
+        github.comments.set(187, [{ id: 900, author: "me", body: "создай файл p.txt", createdAt: "" }]);
+        await runner.check();
+
+        const task = JSON.parse(await fs.readFile(stateFile, "utf8")).tasks["187"];
+        expect(task.sessionId).not.toBe(old.id);
+        expect((await sessions.get(task.sessionId)).session.profile).toBe("coder");
+        expect(run(remote, "ls-tree", "--name-only", "justai/issue-187")).toContain("p.txt");
+    }, 90_000);
+
     it("checks the format of a branch's e2e scenarios without starting anything («/justai e2e check»)", async () => {
         await import("node:fs/promises").then(fs => fs.mkdir(path.join(root, "tests", "e2e"), { recursive: true }));
         await writeFile(path.join(root, "tests", "e2e", "good.yml"), "steps:\n  - click: '#a'\n  - expectVisible: '#b'\n");
@@ -853,6 +943,20 @@ describe.skipIf(!git.available)("GitHubTaskRunner", () => {
         expect(baseTarget("Цель: …\n\nBase: #113")).toBe(113);
         expect(baseTarget("- **База:** #7")).toBe(7);
         expect(baseTarget("see base #3 in the text")).toBeNull();
+    });
+
+    it("reads which files a task names and whether it restricts changes to them", () => {
+        const text = "Добавь в `README.md` раздел, поправь server/index.js и сценарии в tests/e2e/. Версия 1.2.3, см. https://x.io/a.html. Не меняй другие файлы.";
+        expect(mentionedFiles(text)).toEqual(["README.md", "server/index.js", "tests/e2e/"]);
+        expect(restrictsFiles(text)).toBe(true);
+        expect(restrictsFiles("Исправь только start.bat")).toBe(true);
+        expect(restrictsFiles("Добавь страницу и тесты")).toBe(false);
+        expect(isTempFile("README_original.tmp")).toBe(true);
+        expect(isTempFile("src/app.js.bak")).toBe(true);
+        expect(isTempFile("notes~")).toBe(true);
+        expect(isTempFile("src/bold.js")).toBe(false);
+        expect(isDependencyPath("web/node_modules/a/index.js")).toBe(true);
+        expect(isDependencyPath("src/modules/a.js")).toBe(false);
     });
 
     it("runs commands on the branch of any pull request of the repository, not only bridge tasks", async () => {

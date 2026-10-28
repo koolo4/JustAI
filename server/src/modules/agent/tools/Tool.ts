@@ -28,6 +28,11 @@ export interface Tool<Schema extends z.ZodType = z.ZodType> {
     readonly requiresApproval?: boolean;
     /** kind=write, но файлы не меняются (клик в браузере): не запускать автопроверку. */
     readonly changesFiles?: boolean;
+    /**
+     * Привести вход модели к схеме до проверки: небольшие модели путают форму (плоские поля вместо списка,
+     * список строкой JSON, «file_path» вместо «path»). Схема для модели при этом не меняется.
+     */
+    readonly normalizeInput?: (input: unknown) => unknown;
     run(input: z.infer<Schema>, context: ToolContext): Promise<ToolOutput>;
 }
 

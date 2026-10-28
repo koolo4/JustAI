@@ -151,6 +151,72 @@ export function baseTarget(body: string, label = "justai"): number | null {
     return match ? Number(match[1]) : null;
 }
 
+/** Сообщение агенту по итогам проверки изменений: что исправить, прежде чем задача будет готова. */
+export function auditPrompt(problems: string[]): string {
+    return [
+        "[JustAI] Перед завершением JustAI проверил твои изменения по git и нашёл проблемы:",
+        ...problems.map(item => `- ${item}`),
+        "Исправь их сейчас: верни удалённые нужные части файлов (git_diff покажет, что удалено), отмени правки файлов, которые задача не называет,",
+        "внеси недостающие изменения. Если изменение действительно требуется задачей — оставь его и объясни в отчёте почему.",
+        "Затем коротко отчитайся.",
+    ].join("\n");
+}
+
+/**
+ * Файлы, которые называет текст задачи: `server/index.js`, README.md, tests/e2e/disk.yml.
+ * Версии (1.2.3) и адреса не считаются.
+ */
+export function mentionedFiles(text: string): string[] {
+    const files = new Set<string>();
+    const clean = text.replace(/https?:\/\/\S+/g, " ");
+
+    for (const match of clean.matchAll(/(?:^|[\s`'"(«*])((?:[\w.-]+\/)*[\w-][\w.-]*\.[a-z][a-z0-9]{0,6})(?=$|[\s`'"),.;:»*!?])/gim)) {
+        const file = match[1]!.replace(/^\.\//, "");
+        if (!/^\d+(\.\d+)+$/.test(file)) files.add(file);
+    }
+
+    // Папки («в tests/e2e/») разрешают все файлы в них.
+    for (const match of clean.matchAll(/(?:^|[\s`'"(«*])((?:[\w.-]+\/)+)(?=$|[\s`'"),.;:»*!?])/gim)) {
+        files.add(match[1]!.replace(/^\.\//, ""));
+    }
+
+    return [...files];
+}
+
+/** Задача сама просит переписать файл целиком — короткий новый текст тогда не «обрезка». */
+function asksFullRewrite(text: string): boolean {
+    return /(замени|заменить|перепиши|переписать|перезапиши)[^.\n]{0,60}(всё|все|целиком|полностью|содержимое)|\b(whole|entire|full) (content|file)\b/i.test(text);
+}
+
+/** Задача ограничивает, какие файлы менять: «только», «не меняй/не трогай», «only», «do not change». */
+export function restrictsFiles(text: string): boolean {
+    return /(^|[\s(«])(только|исключительно)(\s|$)|не\s+(меняй|меняйте|менять|трогай|трогать|изменяй|изменять|редактируй)|\bonly\b|\bdo not (change|modify|touch|edit)\b/im.test(text);
+}
+
+function sameFile(changed: string, named: string): boolean {
+    const a = changed.replace(/\\/g, "/").toLowerCase();
+    const b = named.replace(/\\/g, "/").toLowerCase();
+    return b.endsWith("/") ? a.startsWith(b) || a.includes(`/${b}`) : a === b || a.endsWith(`/${b}`);
+}
+
+/** package-lock.json меняется вместе с package.json — не «вне задачи». */
+function isLockFileOf(file: string, allowed: string[]): boolean {
+    return /(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$/.test(file) && allowed.some(name => /(^|\/)package\.json$/.test(name));
+}
+
+/** node_modules на любой глубине (в glob две звёздочки со слэшем совпадают и с корнем). */
+const DEPS_PATHSPEC = ":(glob)**/node_modules/**";
+
+export function isDependencyPath(file: string): boolean {
+    return /(^|\/)node_modules\//.test(file.replace(/\\/g, "/"));
+}
+
+/** Временные файлы, которые агент оставляет «на всякий случай»: README_original.tmp, app.js.bak, x.orig, x~. */
+export function isTempFile(file: string): boolean {
+    const name = file.replace(/\\/g, "/").split("/").pop() ?? "";
+    return /\.(tmp|temp|bak|orig|swp)$/i.test(name) || name.endsWith("~") || /[_.-](original|backup|old)(\.[\w]+)?$/i.test(name);
+}
+
 /** Последняя строка `git diff --stat`: «2 files changed, 3 insertions(+), 1 deletion(-)». */
 function statSummary(stat: string): string {
     return stat.split("\n").at(-1)!.trim();
@@ -213,6 +279,10 @@ export class GitHubTaskRunner {
 
     /** До какого времени не начинать работу агента: модель только что не ответила. */
     private modelDownUntil = 0;
+
+    /** Ветка, от которой идёт текущая задача, и что мост не пустил в её коммиты (для отчёта). */
+    private currentBase = "";
+    private junk: string[] = [];
 
     /** Событие в ленту моста. */
     private note(event: Omit<BridgeEvent, "id" | "time">): void {
@@ -766,9 +836,13 @@ export class GitHubTaskRunner {
                 await this.checkoutBranch(branch, base, Boolean(previous));
             }
 
+            this.currentBase = base;
+            this.junk = [];
+
             if (mergeBase) {
                 if (await this.mergeBranch(mergeBase.branch)) {
                     base = mergeBase.branch;
+                    this.currentBase = base;
                     task.base = base;
                     await this.save(state);
                     const number = Number(task.pullRequest?.split("/").pop());
@@ -787,11 +861,19 @@ export class GitHubTaskRunner {
 
             // С чего начался этот запуск: в отчёте «в этом запуске» отдельно от того, что уже было в ветке.
             const startHead = (await this.git(["rev-parse", "HEAD"]).catch(() => "")).trim();
-            const freshSession = !task.sessionId || !(await sessions.get(task.sessionId).then(() => true, () => false));
+            const profile = kind === "test" ? config.testProfile ?? "tester" : config.profile;
+            const existing = task.sessionId ? await sessions.get(task.sessionId).catch(() => null) : null;
+            // Сессия со старым профилем (до лёгкого профиля github) — новая: профиль сессии не меняется, а полный
+            // набор инструментов съедает окно маленькой модели. Сделанное — в ветке, задача и указания — в новом промпте.
+            const freshSession = !existing || existing.session.profile !== profile;
+
+            if (existing && freshSession) {
+                this.note({ kind: "note", issue: issue.number, title, text: `Новая сессия с профилем ${profile} (была ${existing.session.profile}): сделанное — в ветке, история прошлых запусков не переносится.` });
+            }
 
             if (freshSession) {
                 const created = await sessions.create({
-                    profile: kind === "test" ? config.testProfile ?? "tester" : config.profile,
+                    profile,
                     provider: config.provider,
                     ...(config.model ? { model: config.model } : {}),
                     ...(config.executorProvider ? { executorProvider: config.executorProvider } : {}),
@@ -818,6 +900,21 @@ export class GitHubTaskRunner {
             // Пока агент работает: живой отчёт в issue и проверка команды «/justai stop».
             const watch = await this.watch(issue, task, startIndex, state);
             await sessions.waitForIdle(task.sessionId);
+
+            // Проверка изменений по git до завершения: агенту один раз возвращается то, что видно по диффу
+            // (ничего не изменено, файл обрезан, правки вне названных в задаче файлов), — чтобы он исправил сам.
+            const taskText = [issue.body, ...feedback.map(item => item.body)].join("\n");
+
+            if (kind === "code" && !watch.stopped && (await sessions.get(task.sessionId)).session.status === "completed") {
+                const audit = await this.auditChanges(startHead, base, taskText);
+
+                if (audit.length) {
+                    this.note({ kind: "note", issue: issue.number, title, text: `Проверка изменений: ${audit.join("; ")} — отправлено агенту на исправление.` });
+                    await sessions.send(task.sessionId, { text: auditPrompt(audit) });
+                    await sessions.waitForIdle(task.sessionId);
+                }
+            }
+
             await watch.finish();
             // Серверы, которые агент оставил запущенными, мешают проверкам и следующей задаче.
             await this.cleanupSession(task.sessionId);
@@ -914,20 +1011,27 @@ export class GitHubTaskRunner {
                 return;
             }
 
-            const ok = details.session.status === "completed" && (committed || Boolean(task.pullRequest));
+            const finished = details.session.status === "completed" && (committed || Boolean(task.pullRequest));
+            // Проверки — не со слов агента: мост запускает их сам на том, что закоммичено.
+            const checks = finished ? await this.runChecks() : null;
+            if (checks) task.checks = checks.status;
+            // Что осталось после круга исправлений: «зелёный» отчёт агента не делает задачу готовой.
+            const problems = finished ? await this.auditChanges(startHead, base, taskText) : [];
+            const ok = finished && checks?.status !== "failed" && problems.length === 0;
             task.status = ok ? "review" : "failed";
             await watch.update(ok ? "✅ **JustAI** закончил — отчёт ниже." : "⚠️ **JustAI** не смог закончить — подробности ниже.");
 
-            // Проверки — не со слов агента: мост запускает их сам на том, что закоммичено.
-            const checks = ok ? await this.runChecks() : null;
-            if (checks) task.checks = checks.status;
             const screenshots = await this.uploadScreenshots(issue.number, messages);
             const toolError = ok ? "" : lastToolError(messages);
 
             await this.soft(client.comment(issue.number, [
-                ok ? "✅ **JustAI** закончил этот шаг." : "⚠️ **JustAI** не смог закончить этот шаг.",
+                ok ? "✅ **JustAI** закончил этот шаг."
+                    : finished ? "⚠️ **JustAI**: агент закончил, но результат не готов к слиянию — причины ниже." : "⚠️ **JustAI** не смог закончить этот шаг.",
                 `Ветка \`${branch}\`${base !== defaultBase ? ` (от \`${base}\`)` : ""}${where}`,
                 `**Факты по git:** ${thisRun}${inBranch ? `; ${inBranch}` : ""}.`,
+                problems.length ? `**Проверка изменений не пройдена** (по git):\n${problems.map(item => `- ${item}`).join("\n")}` : "",
+                finished && checks?.status === "failed" ? "**Проверки проекта не прошли** — задача не готова, даже если агент пишет обратное." : "",
+                this.junk.length ? `**Не попало в коммит** (мост не пускает в PR зависимости и временные файлы): ${this.junk.join("; ")}.` : "",
                 lastError ? `**Почему остановился** (из лога): ${lastError}` : "",
                 unavailable ? `Модель не отвечала ${retries} попыток подряд — задача остановлена. Проверьте модель на ПК1 (\`ollama ps\`), затем \`/${config.label} continue #${issue.number}\`.` : "",
                 toolError ? `**Последняя ошибка инструмента** (из лога): ${toolError}` : "",
@@ -951,8 +1055,10 @@ export class GitHubTaskRunner {
                 text: [
                     ok ? `Готово${task.pullRequest ? ` → PR ${task.pullRequest.split("/").pop()}` : ""}` : `Не удалось${lastError ? `: ${lastError}` : ""}`,
                     checks ? `проверки ${checks.status === "passed" ? "✓" : checks.status === "failed" ? "✕" : "—"}` : "",
+                    problems.length ? `проверка изменений: ${problems.join("; ")}` : "",
                     thisRun,
                     inBranch,
+                    this.junk.length ? `не в коммите: ${this.junk.join("; ")}` : "",
                 ].filter(Boolean).join(" · "),
             });
         }
@@ -1564,9 +1670,12 @@ export class GitHubTaskRunner {
         const file = path.resolve(this.deps.workspaceRoot, relative);
         const current = await readFile(file, "utf8").catch(() => "");
 
-        if (!/^\/?\.justai\/?\s*$/m.test(current)) {
+        // node_modules: если в проекте нет .gitignore, «npm install» агента попадал в PR целиком (kaitos #138: 1713 файлов).
+        const missing = [".justai/", "node_modules/"].filter(line => !new RegExp(`^/?${escapeRegExp(line.replace(/\/$/, ""))}/?\\s*$`, "m").test(current));
+
+        if (missing.length) {
             await mkdir(path.dirname(file), { recursive: true });
-            await writeFile(file, `${current}${current && !current.endsWith("\n") ? "\n" : ""}.justai/\n`, "utf8");
+            await writeFile(file, `${current}${current && !current.endsWith("\n") ? "\n" : ""}${missing.join("\n")}\n`, "utf8");
         }
 
         this.excluded = true;
@@ -1771,6 +1880,90 @@ export class GitHubTaskRunner {
         await this.git(["checkout", "-B", branch, remoteBranch ? `origin/${branch}` : `origin/${base}`]);
     }
 
+    /**
+     * Что не должно попасть в PR, даже если агент это создал: зависимости (node_modules) и временные файлы
+     * (*.tmp, *.bak, *.orig, *~, *_original.*). Новые — убираются из индекса (временные — в git stash, не удаляются);
+     * уже закоммиченные в ветке задачи зависимости, которых нет в основной ветке, — убираются из индекса
+     * («git rm --cached»: файлы на диске остаются). Список убранного — в this.junk для отчёта.
+     */
+    private async dropJunk(issue: number): Promise<void> {
+        const added = (await this.git(["diff", "--cached", "--name-only", "--diff-filter=A"]).catch(() => ""))
+            .split("\n").map(line => line.trim()).filter(Boolean);
+        const temp = added.filter(file => isTempFile(file));
+        const deps = added.filter(file => isDependencyPath(file));
+
+        if (deps.length) {
+            await this.git(["reset", "-q", "--", DEPS_PATHSPEC]).catch(() => undefined);
+            this.junk.push(`${deps.length} файл(ов) из node_modules`);
+        }
+
+        // Зависимости, закоммиченные раньше (в ветке, но не в основной), — убрать из ветки.
+        const base = this.currentBase;
+        const tracked = (await this.git(["ls-files", "--", DEPS_PATHSPEC]).catch(() => "")).trim();
+
+        if (tracked && base) {
+            const inBase = (await this.git(["ls-tree", "-r", "--name-only", `refs/remotes/origin/${base}`, "--", DEPS_PATHSPEC]).catch(() => "")).trim();
+
+            if (!inBase) {
+                await this.git(["rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", DEPS_PATHSPEC]).catch(() => undefined);
+                this.junk.push(`${tracked.split("\n").length} файл(ов) node_modules убраны из ветки (на диске остались)`);
+            }
+        }
+
+        if (temp.length) {
+            await this.git(["reset", "-q", "--", ...temp]).catch(() => undefined);
+            await this.git(["stash", "push", "--include-untracked", "-q", "-m", `JustAI: временные файлы задачи #${issue}`, "--", ...temp]).catch(() => undefined);
+            this.junk.push(`временные файлы ${temp.map(file => `\`${file}\``).join(", ")} (в git stash)`);
+        }
+    }
+
+    /**
+     * Проверка изменений этого запуска по git (рабочая копия против начала запуска): что видно без нейросети.
+     * - ничего не изменено, и в ветке относительно базы тоже пусто;
+     * - файл обрезан: удалено больше половины (от 30 строк), осталось меньше 60% — так #137 потеряла разделы README;
+     * - задача ограничивает файлы («только …», «не меняй …»), а изменены другие (#137, #142).
+     * Пустой список — проблем не найдено.
+     */
+    private async auditChanges(startHead: string, base: string, taskText: string): Promise<string[]> {
+        if (!startHead) return [];
+
+        const problems: string[] = [];
+        const numstat = (await this.git(["diff", "--numstat", startHead]).catch(() => "")).split("\n").filter(Boolean);
+        const untracked = (await this.git(["ls-files", "--others", "--exclude-standard"]).catch(() => ""))
+            .split("\n").map(line => line.trim()).filter(Boolean);
+        const changed = [...new Set([...numstat.map(line => line.split("\t").slice(2).join("\t")), ...untracked])]
+            .filter(file => file && !isDependencyPath(file) && !isTempFile(file) && !file.startsWith(".justai/"));
+
+        if (!changed.length) {
+            const inBranch = (await this.git(["diff", "--stat", `refs/remotes/origin/${base}...HEAD`]).catch(() => "")).trim();
+            if (!inBranch) problems.push("ни один файл не изменён — задача требует правок");
+            return problems;
+        }
+
+        for (const line of asksFullRewrite(taskText) ? [] : numstat) {
+            const [added, deleted, ...rest] = line.split("\t");
+            const file = rest.join("\t");
+            if (added === "-" || !file) continue;
+
+            const before = (await this.git(["show", `${startHead}:${file}`]).catch(() => "")).split("\n").length;
+            const removed = Number(deleted);
+            const after = before - removed + Number(added);
+
+            if (before >= 30 && removed >= before / 2 && after < before * 0.6) {
+                problems.push(`\`${file}\` обрезан: было ${before} строк, осталось ${after} (удалено ${removed})`);
+            }
+        }
+
+        const allowed = mentionedFiles(taskText);
+
+        if (restrictsFiles(taskText) && allowed.length) {
+            const outside = changed.filter(file => !allowed.some(name => sameFile(file, name)) && !isLockFileOf(file, allowed));
+            if (outside.length) problems.push(`изменены файлы вне задачи: ${outside.slice(0, 8).map(file => `\`${file}\``).join(", ")}${outside.length > 8 ? " …" : ""} (задача называет: ${allowed.slice(0, 8).map(file => `\`${file}\``).join(", ")})`);
+        }
+
+        return problems;
+    }
+
     /** Влить ветку с GitHub в текущую; конфликт — слияние отменяется, false. */
     private async mergeBranch(source: string): Promise<boolean> {
         const identity = (await this.git(["config", "user.email"]).catch(() => "")).trim()
@@ -1794,6 +1987,7 @@ export class GitHubTaskRunner {
         await this.ensureLocalExclude();
         await this.git(["add", "-A"]);
         await this.git(["reset", "-q", "--", ".justai"]).catch(() => undefined);
+        await this.dropJunk(issue.number);
 
         if (!(await this.git(["diff", "--cached", "--name-only"])).trim()) {
             return false;

@@ -7,7 +7,7 @@ import type { AgentEvent } from "@justai/shared";
 
 import { EventBus, FileCreatedEvent, FileSavedEvent } from "../../../src/core/events/index.js";
 import { AgentFileSystem } from "../../../src/modules/agent/tools/AgentFileSystem.js";
-import { createFileTools } from "../../../src/modules/agent/tools/fileTools.js";
+import { createFileTools, normalizeEditInput, normalizeFileInput } from "../../../src/modules/agent/tools/fileTools.js";
 import { ToolError, type Tool, type ToolContext } from "../../../src/modules/agent/tools/Tool.js";
 import { createTempWorkspace, type TempWorkspace } from "../../helpers/tempWorkspace.js";
 
@@ -234,5 +234,22 @@ describe("file tools", () => {
         await expect(run("read_file", { path: "missing.ts" })).rejects.toThrow("does not exist");
         await expect(run("read_file", { path: "src" })).rejects.toThrow("is a directory");
         await expect(run("write_file", { path: "src", content: "" })).rejects.toThrow("is a directory");
+    });
+});
+
+describe("tool input forms of small models", () => {
+    it("turns a flat edit_file call, edits as a JSON string or a single object into the edits list", () => {
+        expect(normalizeEditInput({ path: "a.js", old_string: "x", new_string: "y" })).toEqual({ path: "a.js", edits: [{ old_string: "x", new_string: "y" }] });
+        expect(normalizeEditInput({ path: "a.js", edits: '[{"old_string":"x","new_string":"y"}]' })).toEqual({ path: "a.js", edits: [{ old_string: "x", new_string: "y" }] });
+        expect(normalizeEditInput({ file_path: "a.js", edits: { old_text: "x", new_text: "y" } })).toEqual({ path: "a.js", edits: [{ old_string: "x", new_string: "y" }] });
+        // Уже правильная форма не меняется; непонятное остаётся как есть — схема вернёт модели ошибку.
+        expect(normalizeEditInput({ path: "a.js", edits: [{ old_string: "x", new_string: "y", replace_all: false }] })).toEqual({ path: "a.js", edits: [{ old_string: "x", new_string: "y", replace_all: false }] });
+        expect(normalizeEditInput(42)).toBe(42);
+    });
+
+    it("accepts file_path / filename / text / contents for read_file and write_file", () => {
+        expect(normalizeFileInput({ file_path: "a.md", text: "hi" })).toEqual({ path: "a.md", content: "hi" });
+        expect(normalizeFileInput('{"filename":"b.md","contents":"x"}')).toEqual({ path: "b.md", content: "x" });
+        expect(normalizeFileInput({ path: "c.md", content: "keep", text: "other" })).toEqual({ path: "c.md", content: "keep", text: "other" });
     });
 });

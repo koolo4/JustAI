@@ -7,6 +7,81 @@ import { defineTool, ToolError, type Tool } from "./Tool.js";
 
 const DEFAULT_READ_LIMIT = 2000;
 
+const PATH_ALIASES = ["file_path", "filepath", "filename", "file", "path_to_file"];
+const CONTENT_ALIASES = ["contents", "text", "data", "file_content", "new_content"];
+
+type Loose = Record<string, unknown>;
+
+function asObject(input: unknown): Loose | null {
+    if (typeof input === "string") {
+        try { input = JSON.parse(input); }
+        catch { return null; }
+    }
+
+    return input && typeof input === "object" && !Array.isArray(input) ? { ...(input as Loose) } : null;
+}
+
+/** Первое из полей-синонимов переносится в основное, если основного нет. */
+function alias(value: Loose, key: string, aliases: string[]): void {
+    if (value[key] !== undefined) return;
+
+    const found = aliases.find(name => value[name] !== undefined);
+
+    if (found) {
+        value[key] = value[found];
+        delete value[found];
+    }
+}
+
+/** read_file/write_file: «file_path», «filename» → path; «text», «contents» → content. */
+export function normalizeFileInput(input: unknown): unknown {
+    const value = asObject(input);
+    if (!value) return input;
+
+    alias(value, "path", PATH_ALIASES);
+    alias(value, "content", CONTENT_ALIASES);
+    return value;
+}
+
+/**
+ * edit_file в формах, которые пишут небольшие модели:
+ * { path, old_string, new_string } без списка; edits — строкой JSON или одним объектом; old_text/new_text.
+ */
+export function normalizeEditInput(input: unknown): unknown {
+    const value = asObject(input);
+    if (!value) return input;
+
+    alias(value, "path", PATH_ALIASES);
+
+    if (typeof value.edits === "string") {
+        try { value.edits = JSON.parse(value.edits); }
+        catch { /* останется строкой — схема объяснит */ }
+    }
+
+    if (value.edits && typeof value.edits === "object" && !Array.isArray(value.edits)) {
+        value.edits = [value.edits];
+    }
+
+    if (value.edits === undefined && (value.old_string !== undefined || value.old_text !== undefined || value.search !== undefined)) {
+        value.edits = [{ old_string: value.old_string, new_string: value.new_string, old_text: value.old_text, new_text: value.new_text, search: value.search, replace: value.replace, replace_all: value.replace_all }];
+        for (const key of ["old_string", "new_string", "old_text", "new_text", "search", "replace", "replace_all"]) delete value[key];
+    }
+
+    if (Array.isArray(value.edits)) {
+        value.edits = value.edits.map(edit => {
+            const item = asObject(edit);
+            if (!item) return edit;
+
+            alias(item, "old_string", ["old_text", "old", "search", "find"]);
+            alias(item, "new_string", ["new_text", "new", "replace", "replacement"]);
+            for (const key of Object.keys(item)) if (item[key] === undefined) delete item[key];
+            return item;
+        });
+    }
+
+    return value;
+}
+
 /**
  * Файловые инструменты агента поверх AgentFileSystem.
  */
@@ -26,6 +101,7 @@ export function createFileTools(
             offset: z.number().int().min(1).optional().describe("1-based line to start from."),
             limit: z.number().int().min(1).optional().describe("Number of lines to read."),
         }),
+        normalizeInput: normalizeFileInput,
         kind: "read",
         run: async ({ path: file, offset = 1, limit = DEFAULT_READ_LIMIT }, context) => {
             const { text } = await files.read(context.sessionId, file);
@@ -99,6 +175,7 @@ export function createFileTools(
                     .describe("With replace_all: how many occurrences you expect to change. Required when old_string occurs more than once."),
             })).min(1),
         }),
+        normalizeInput: normalizeEditInput,
         kind: "write",
         run: async ({ path: file, edits }, context) => {
             const { state } = await files.readForEdit(context.sessionId, file);
@@ -209,6 +286,7 @@ export function createFileTools(
             confirm_shrink: z.boolean().default(false)
                 .describe("Set only if you really mean to replace a file with much shorter content (most of it will be deleted)."),
         }),
+        normalizeInput: normalizeFileInput,
         kind: "write",
         run: async ({ path: file, content: input, append, confirm_shrink }, context) => {
             let content = input;

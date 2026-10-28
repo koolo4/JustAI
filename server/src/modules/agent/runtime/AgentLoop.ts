@@ -589,7 +589,7 @@ export class AgentLoop {
             );
         }
 
-        const parsed = tool.inputSchema.safeParse(use.input);
+        const parsed = tool.inputSchema.safeParse(tool.normalizeInput ? tool.normalizeInput(use.input) : use.input);
 
         if (!parsed.success) {
             return errorResult(

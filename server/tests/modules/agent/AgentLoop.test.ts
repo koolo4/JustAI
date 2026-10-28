@@ -177,6 +177,27 @@ describe("AgentLoop", () => {
         expect(reads).toBe(2);
     });
 
+    it("normalizes a tool's input before validating it (small models mix up the shape)", async () => {
+        const seen: unknown[] = [];
+        const editor = defineTool({
+            name: "edit_file", description: "e", kind: "write",
+            inputSchema: z.object({ path: z.string(), edits: z.array(z.object({ old_string: z.string(), new_string: z.string() })) }),
+            normalizeInput: input => {
+                const value = input as { path: string; old_string?: string; new_string?: string };
+                return value.old_string ? { path: value.path, edits: [{ old_string: value.old_string, new_string: value.new_string }] } : input;
+            },
+            run: async input => { seen.push(input); return "ok"; },
+        });
+        const { loop, user, saved } = setup([
+            { toolCalls: [{ name: "edit_file", input: { path: "a.js", old_string: "x", new_string: "y" } }] },
+            { text: "done" },
+        ], { tools: [editor] });
+
+        await loop.run([user]);
+        expect(toolResults(saved[1])[0]).toMatchObject({ isError: false });
+        expect(seen).toEqual([{ path: "a.js", edits: [{ old_string: "x", new_string: "y" }] }]);
+    });
+
     it("calibrates the context estimate with the provider's real token count", async () => {
         // Оценка (символы / 3) завышена вдвое против настоящего счёта: без поправки история ужималась бы.
         const reader = defineTool({ name: "read_file", description: "r", inputSchema: z.object({ path: z.string() }), kind: "read", run: async () => "x".repeat(4_500) });
