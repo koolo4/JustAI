@@ -1094,6 +1094,9 @@ export class GitHubTaskRunner {
             // Упавшая или отложенная задача не должна оставлять файлы в папке: иначе следующие задачи упираются в «грязную» папку.
             if (kind === "code" && (task.status === "failed" || task.waitingModel)) await this.saveFailedWork(issue, branch);
             await this.git(["checkout", defaultBase]).catch(() => undefined);
+            // Задачи идут от origin/<основная>, а локальная основная сама не обновляется: в интерфейсе и редакторе
+            // проект выглядел бы как первый коммит (kaitos: «Initial commit», отставание 61). Только перемотка вперёд.
+            await this.git(["merge", "--ff-only", "-q", `refs/remotes/origin/${defaultBase}`]).catch(() => undefined);
             await this.save(state);
             release();
             this.status = { ...this.status, currentIssue: undefined, currentSessionId: undefined,

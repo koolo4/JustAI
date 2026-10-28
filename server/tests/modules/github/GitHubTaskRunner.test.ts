@@ -842,6 +842,23 @@ describe.skipIf(!git.available)("GitHubTaskRunner", () => {
         return () => { MockProvider.prototype.stream = real; };
     }
 
+    it("fast-forwards the local main branch after a task, so the project folder shows the current project", async () => {
+        // На GitHub основная ушла вперёд (слияния PR), локальная осталась на первом коммите.
+        run(root, "checkout", "-b", "elsewhere");
+        await writeFile(path.join(root, "merged.txt"), "from a merged PR");
+        run(root, "add", "merged.txt");
+        run(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "merged PR");
+        run(root, "push", "origin", "HEAD:main");
+        run(root, "checkout", "main");
+        run(root, "branch", "-D", "elsewhere");
+
+        github.issue(184, "создай файл ff.txt");
+        await runner.check();
+
+        expect(run(root, "rev-parse", "main").trim()).toBe(run(remote, "rev-parse", "main").trim());
+        expect(existsSync(path.join(root, "merged.txt"))).toBe(true);
+    }, 90_000);
+
     it("keeps dependencies and temporary files out of the pull request", async () => {
         const restore = await scriptedAgent([[
             { name: "write_file", input: { path: "a.txt", content: "a\n" } },
